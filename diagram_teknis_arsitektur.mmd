@@ -1,0 +1,131 @@
+flowchart LR
+    subgraph BOOT["Application Bootstrap"]
+        MAIN["main.dart"]
+        BIND["WidgetsFlutterBinding"]
+        OBSERVER["Bloc.observer"]
+        BOOTSTRAP["FirebaseBootstrap"]
+        INIT["Firebase.initializeApp"]
+        LOAD["Loading"]
+        ERROR["Startup error"]
+        RETRY["Retry"]
+        APP["EshApp"]
+        ROOT["Root BlocProvider<MonitoringBloc>"]
+        MAIN --> BIND --> BOOTSTRAP
+        MAIN --> OBSERVER
+        BOOTSTRAP --> LOAD
+        BOOTSTRAP --> INIT
+        INIT -->|"Gagal"| ERROR --> RETRY --> INIT
+        INIT -->|"Berhasil"| APP --> ROOT
+    end
+
+    subgraph ROUTING["Routing and Presentation"]
+        ROUTER["GoRouter"]
+        MON_PAGE["/ MonitoringPage"]
+        HIS_PAGE["/history History"]
+        CON_PAGE["/control ControlPage"]
+        MON_VIEW["MonitoringView"]
+        HIS_VIEW["HistoryView"]
+        CON_VIEW["Control UI"]
+        ROOT --> ROUTER
+        ROUTER --> MON_PAGE --> MON_VIEW
+        ROUTER --> HIS_PAGE --> HIS_VIEW
+        ROUTER --> CON_PAGE --> CON_VIEW
+    end
+
+    subgraph MON_BLOC["Monitoring BLoC"]
+        MON_EVENT["MonitoringEvent\nStart, DataUpdated, ConnectionStatusChanged,\nDeviceStateUpdated, ControlRoomDevice, failures"]
+        MON_STATE["MonitoringState\nInitial, Loading, Error, Loaded"]
+        TELEMETRY["mcbData"]
+        CONNECTION["isConnected"]
+        DEVICE["deviceData / desired optimistic"]
+        CONFIRMED["confirmedDeviceData"]
+        PENDING["pendingDevices"]
+        COMMAND_ERRORS["commandErrors"]
+        MON_VIEW --> MON_EVENT
+        CON_VIEW --> MON_EVENT
+        MON_EVENT --> MON_BLOC_CORE["MonitoringBloc"]
+        MON_BLOC_CORE --> MON_STATE
+        MON_STATE --> TELEMETRY
+        MON_STATE --> CONNECTION
+        MON_STATE --> DEVICE
+        MON_STATE --> CONFIRMED
+        MON_STATE --> PENDING
+        MON_STATE --> COMMAND_ERRORS
+        MON_STATE --> MON_VIEW
+        MON_STATE --> CON_VIEW
+    end
+
+    subgraph HIS_BLOC["History Route-local BLoC"]
+        HIS_EVENT["HistoryEvent\nLoad, Filter, Refresh"]
+        HIS_CORE["HistoryBloc"]
+        HIS_STATE["HistoryState\nInitial, Loading, Loaded, Empty, Error"]
+        CHART["Chart data"]
+        HIS_VIEW --> HIS_EVENT --> HIS_CORE --> HIS_STATE --> CHART --> HIS_VIEW
+    end
+
+    subgraph SERVICE["FirebaseService"]
+        MONITOR_STREAM["getMonitoringDataStream()\nRTDB listener /device/sensorData"]
+        ROOM_STREAM["getRoomDevicesStream()\nRTDB /rooms"]
+        CONNECTION_STREAM["getConnectionStatus()\nRTDB /.info/connected"]
+        CONTROL_WRITE["controlRoomDevice()\nRTDB /commands/rooms/<room>/<device>"]
+        HISTORY_QUERY["getHistoricalData()\nFirestore sensorLogs"]
+        MON_BLOC_CORE --> MONITOR_STREAM
+        MON_BLOC_CORE --> ROOM_STREAM
+        MON_BLOC_CORE --> CONNECTION_STREAM
+        MON_BLOC_CORE --> CONTROL_WRITE
+        HIS_CORE --> HISTORY_QUERY
+        MONITOR_STREAM --> MON_EVENT
+        ROOM_STREAM --> MON_EVENT
+        CONNECTION_STREAM --> MON_EVENT
+    end
+
+    subgraph BACKEND["Firebase Backend"]
+        RTDB[("Firebase Realtime Database")]
+        SENSOR["/device/sensorData\nparsed power and environment"]
+        ROOMS["/rooms/<room>/<device>\nconfirmed state"]
+        COMMANDS["/commands/rooms/<room>/<device>\nqueued command"]
+        INFO["/.info/connected"]
+        FIRESTORE[("Cloud Firestore")]
+        LOGS["sensorLogs\ncanonical history"]
+        LEGACY["energyData\nlegacy helper path"]
+        MONITOR_STREAM --> SENSOR --> RTDB
+        ROOM_STREAM --> ROOMS --> RTDB
+        CONNECTION_STREAM --> INFO --> RTDB
+        CONTROL_WRITE --> COMMANDS --> RTDB
+        HISTORY_QUERY --> LOGS --> FIRESTORE
+        LEGACY -.-> FIRESTORE
+    end
+
+    subgraph FIRMWARE["Firmware Boundary"]
+        MASTER["fullgabung master"]
+        LOCAL["Master relay local"]
+        ESP["ESP-NOW"]
+        SLAVE["fullgabung2 slave"]
+        ACK["ACK/state report"]
+        COMMANDS --> MASTER
+        MASTER --> LOCAL
+        MASTER --> ESP --> SLAVE --> ACK --> MASTER
+        MASTER --> ROOMS
+    end
+
+    subgraph COMMAND_STATE["Command State and Failure"]
+        INTENT["UI intent"]
+        OPTIMISTIC["Desired optimistic state"]
+        WAIT["Pending\nFlutter timeout 5 s"]
+        MATCH["/rooms matches desired"]
+        CONFIRM["Confirmed"]
+        ROLLBACK["Rollback to confirmed\ncommand error"]
+        CON_VIEW --> INTENT --> OPTIMISTIC --> WAIT
+        WAIT -->|"Firebase write"| COMMANDS
+        WAIT -->|"Room state match"| MATCH --> CONFIRM
+        WAIT -->|"Write failure or timeout"| ROLLBACK
+        CONFIRM --> CONFIRMED
+        ROLLBACK --> COMMAND_ERRORS
+    end
+
+    subgraph TIMEOUT["Firmware Timing"]
+        MASTER_TIMEOUT["Master ACK timeout 3 s"]
+        FLUTTER_TIMEOUT["Flutter confirmation timeout 5 s"]
+        ESP --> MASTER_TIMEOUT --> ROLLBACK
+        WAIT --> FLUTTER_TIMEOUT --> ROLLBACK
+    end

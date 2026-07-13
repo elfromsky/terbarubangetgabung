@@ -1,0 +1,30 @@
+{
+  "project_info": {
+    "project_number": "714869909868",
+    "firebase_url": "https://e-smarthome-62391-default-rtdb.asia-southeast1.firebasedatabase.app",
+    "project_id": "e-smarthome-62391",
+    "storage_bucket": "e-smarthome-62391.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:714869909868:android:9daa6a18584a6d85482b49",
+        "android_client_info": {
+          "package_name": "com.example.esh"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyASY4d0oIPLu-SeRAx7zA1XROHrPSu6dS8"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
