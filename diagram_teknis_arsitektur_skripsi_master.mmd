@@ -1,0 +1,136 @@
+flowchart LR
+    subgraph EXT["Boundary Eksternal"]
+        APP["Aplikasi atau automation"]
+        ENV["Sensor environment RS485"]
+        PZEM["PZEM-004T v3"]
+        SLAVE["Board slave ESP-NOW"]
+        LOAD["Beban relay master"]
+        NTP["NTP server"]
+    end
+
+    subgraph BOOT["Boot: src/main.cpp setup()"]
+        B0["Serial.begin(115200)"]
+        B1["initRelays()"]
+        B2["UART2 dan RS485_DIR"]
+        B3["initWiFi()"]
+        B4["initNTP()"]
+        B5["FirebaseInit()"]
+        B6["initESPNow()"]
+        B7{"ESP-NOW berhasil?"}
+        B8["registerSlavePeer()\nchannel peer 0, interface STA"]
+        B9["initializePZEM()"]
+        B10["initializeDimmers()"]
+    end
+
+    subgraph FIREBASE["Firebase Layer"]
+        CLIENT["firebase_app.cpp\nFirebaseApp dan RTDB"]
+        COMMAND_STREAM["Stream /commands"]
+        COMMAND_PATH["/commands/rooms/<room>/<device>"]
+        ROOM_PATH["/rooms/<room>/<device>"]
+        SENSOR_ENV["/device/sensorData/environment"]
+        SENSOR_POWER["/device/sensorData/power"]
+        SENSOR_META["timestamp, unix_time, system"]
+    end
+
+    subgraph LOOP["Runtime: src/main.cpp loop()"]
+        CHECK["checkFirebaseCommands()"]
+        FIREBASE_LOOP["FirebaseLoop()"]
+        SLAVE_PROCESS["processSlaveCommunication()"]
+        SENSOR_POLL["pollSensorsNonBlocking()\ninterval nominal 500 ms"]
+        SENSOR_STEP{"Sensor step"}
+        MODBUS_TEMP["readModBus(0x0001)\ntemperature"]
+        MODBUS_HUM["readModBus(0x0002)\nhumidity"]
+        PZEM_READ["readPZEM()\nV, I, P, E, Hz, PF"]
+        INTERVAL{"5 detik berlalu?"}
+        READY{"FirebaseReady()?"}
+        UPLOAD["sendSensorData()"]
+        DELAY["delay(100 ms)"]
+    end
+
+    subgraph ROUTER["Firebase Command Router"]
+        RESULT["handleFirebaseResult()"]
+        STREAM_HANDLER["handleCommandStream()"]
+        NORMALIZE["Normalisasi path dan suffix /state"]
+        VALIDATE["Known device dan payload validation"]
+        OWNER{"DeviceOwner"}
+        MASTER_ROUTE["setMasterRelayState()"]
+        SLAVE_ROUTE["forwardToSlave()"]
+        REMOVE["removeCommand()"]
+        PENDING["Satu PendingCommand"]
+        ACK_TIMEOUT["ACK timeout 3000 ms"]
+    end
+
+    subgraph HARDWARE["Hardware Master"]
+        RELAY["relay.cpp\nteras/lampu GPIO 21\nteras/sanyo GPIO 5"]
+        ACTIVE_LOW["ON = GPIO LOW\nOFF = GPIO HIGH"]
+        DIMMER["dimmer.cpp\nzero-cross GPIO 14\ngate GPIO 13 dan 12"]
+        DIMMER_NOTE["initializeDimmers() aktif\ntidak ada caller setDimmerBrightness()"]
+    end
+
+    subgraph RADIO["ESP-NOW Protocol"]
+        CMD["DeviceCommandPayload\n92 byte, room, device, state, brightness, requestId, CRC"]
+        SEND["esp_now_send()\nMAC slave, channel peer 0"]
+        SEND_CALLBACK["onDataSent()"]
+        RECEIVE["onDataRecv()\nfilter MAC slave dan panjang packet"]
+        QUEUE["Receive queue 16 packet"]
+        STATE["DeviceStatePayload\n98 byte, success, errorCode, timestamp, CRC"]
+        ACK_MATCH["CRC, type, requestId, roomKey, deviceKey"]
+    end
+
+    subgraph FAIL["Failure Paths"]
+        INVALID["Payload atau device invalid\ncommand dihapus"]
+        SEND_FAIL["Send failure\ncommand dihapus tanpa retry"]
+        QUEUE_FULL["Queue penuh\npacket baru dibuang"]
+        TIMEOUT["ACK tidak datang\ncommand dihapus"]
+    end
+
+    APP -->|"Tulis command"| COMMAND_PATH
+    COMMAND_PATH --> COMMAND_STREAM
+    COMMAND_STREAM --> RESULT --> STREAM_HANDLER --> NORMALIZE --> VALIDATE
+    VALIDATE -->|"Valid"| OWNER
+    VALIDATE -->|"Invalid"| INVALID --> REMOVE
+    OWNER -->|"Master: teras"| MASTER_ROUTE --> RELAY
+    MASTER_ROUTE --> ROOM_PATH
+    OWNER -->|"Slave: lorong, kamar, dapur"| SLAVE_ROUTE --> CMD --> SEND --> SLAVE
+    SLAVE_ROUTE --> PENDING
+    SEND --> SEND_CALLBACK
+    SEND_CALLBACK -->|"Gagal"| SEND_FAIL --> REMOVE
+    SLAVE --> STATE --> RECEIVE --> QUEUE --> SLAVE_PROCESS --> ACK_MATCH
+    ACK_MATCH -->|"ACK cocok dan sukses"| ROOM_PATH
+    ACK_MATCH -->|"ACK error"| REMOVE
+    PENDING --> ACK_TIMEOUT --> TIMEOUT --> REMOVE
+    QUEUE --> QUEUE_FULL --> TIMEOUT
+    ROOM_PATH --> APP
+
+    B0 --> B1 --> B2 --> B3
+    B3 --> B4 --> NTP
+    B4 --> B5 --> B6 --> B7
+    B7 -->|"Ya"| B8 --> B9
+    B7 -->|"Tidak"| B9
+    B9 --> B10
+    B1 --> RELAY
+    B10 --> DIMMER --> DIMMER_NOTE
+    B2 --> ENV
+    B9 --> PZEM
+    B10 --> LOOP
+
+    LOOP --> CHECK --> FIREBASE_LOOP --> SLAVE_PROCESS
+    LOOP --> SENSOR_POLL --> SENSOR_STEP
+    SENSOR_STEP --> MODBUS_TEMP --> ENV
+    SENSOR_STEP --> MODBUS_HUM --> ENV
+    SENSOR_STEP --> PZEM_READ --> PZEM
+    SENSOR_POLL --> INTERVAL --> READY
+    READY -->|"Ya"| UPLOAD
+    READY -->|"Belum"| DELAY
+    UPLOAD --> SENSOR_ENV
+    UPLOAD --> SENSOR_POWER
+    UPLOAD --> SENSOR_META
+    UPLOAD --> DELAY --> LOOP
+
+    DATABASE["Firebase Realtime Database"]
+    DATABASE --> CLIENT
+    CLIENT --> COMMAND_STREAM
+    SENSOR_ENV --> APP
+    SENSOR_POWER --> APP
+    SENSOR_META --> APP
+    ACTIVE_LOW --> LOAD

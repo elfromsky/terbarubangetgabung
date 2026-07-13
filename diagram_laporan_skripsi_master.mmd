@@ -1,0 +1,45 @@
+flowchart TD
+    subgraph INPUT["Sumber Data dan Perintah"]
+        ENV["Sensor suhu dan kelembapan"]
+        POWER["Sensor daya listrik"]
+        USER["Pengguna melalui aplikasi"]
+        DATABASE[("Firebase Realtime Database")]
+    end
+
+    subgraph MASTER["ESP32-S3 Master: fullgabung"]
+        READ["Pembacaan sensor"]
+        TELEMETRY["Pengolahan dan pengiriman telemetry"]
+        COMMAND["Penerimaan dan validasi command"]
+        ROUTER{"Perangkat milik master atau slave?"}
+        LOCAL["Kontrol relay lokal teras"]
+        ESPNOW["Komunikasi ESP-NOW"]
+        LOCAL_DIMMER["Dimmer lokal diinisialisasi\ntetapi belum terhubung ke command aktif"]
+    end
+
+    subgraph SLAVE["ESP32-S3 Slave: fullgabung2"]
+        SLAVE_ROUTE["Routing room dan device"]
+        SLAVE_OUTPUT["Relay atau dimmer perangkat slave"]
+        SLAVE_REPORT["ACK dan state report"]
+    end
+
+    ENV --> READ
+    POWER --> READ
+    READ --> TELEMETRY
+    TELEMETRY -->|"Telemetry sensor"| DATABASE
+    DATABASE -->|"Data monitoring"| USER
+    USER -->|"Command perangkat"| DATABASE
+    DATABASE --> COMMAND
+    COMMAND -->|"Valid"| ROUTER
+    COMMAND -->|"Tidak valid"| REJECT["Command ditolak"]
+    ROUTER -->|"Master"| LOCAL
+    ROUTER -->|"Slave"| ESPNOW
+    ESPNOW --> SLAVE_ROUTE
+    SLAVE_ROUTE --> SLAVE_OUTPUT
+    SLAVE_OUTPUT --> SLAVE_REPORT
+    SLAVE_REPORT --> ESPNOW
+    LOCAL --> STATE["State perangkat"]
+    ESPNOW --> STATE
+    STATE -->|"State terkonfirmasi"| DATABASE
+    DATABASE -->|"Status perangkat"| USER
+    ESPNOW -->|"Gagal atau timeout"| REJECT
+    READ -.-> LOCAL_DIMMER
