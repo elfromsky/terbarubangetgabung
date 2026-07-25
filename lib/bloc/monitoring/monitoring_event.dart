@@ -1,4 +1,6 @@
-import 'package:esh/models/model.dart';
+import 'package:esh/features/monitoring/domain/entities/mcb_data_collection.dart';
+import 'package:esh/features/monitoring/domain/entities/room_device_collection.dart';
+import 'package:esh/features/monitoring/domain/entities/room_device_state.dart';
 
 abstract class MonitoringEvent {}
 
@@ -39,23 +41,26 @@ class ControlRoomDevice extends MonitoringEvent {
 }
 
 class DeviceStateUpdated extends MonitoringEvent {
-  final Map<String, dynamic> data;
+  final RoomDeviceCollection data;
+
   DeviceStateUpdated(this.data);
 }
 
 class ClearPendingCommand extends MonitoringEvent {
-  final String pendingKey;
-  ClearPendingCommand(this.pendingKey);
+  final DeviceAddress address;
+
+  ClearPendingCommand(this.address);
 }
 
 class MonitoringStreamFailed extends MonitoringEvent {
   final String message;
+
   MonitoringStreamFailed(this.message);
 }
 
 class CommandFailed extends MonitoringEvent {
-  final String pendingKey;
+  final DeviceAddress address;
   final String message;
 
-  CommandFailed(this.pendingKey, this.message);
+  CommandFailed(this.address, this.message);
 }

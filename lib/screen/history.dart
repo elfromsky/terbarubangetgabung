@@ -1,7 +1,7 @@
 import 'package:esh/bloc/history/history_bloc.dart';
 import 'package:esh/bloc/history/history_event.dart';
 import 'package:esh/bloc/history/history_state.dart';
-import 'package:esh/services/firebase_service.dart';
+import 'package:esh/features/history/presentation/models/chart_point.dart';
 import 'package:esh/widgets/appbar.dart';
 import 'package:esh/widgets/selector_page.dart';
 import 'package:flutter/material.dart';
@@ -14,10 +14,7 @@ class History extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return BlocProvider(
-      create: (context) => HistoryBloc(firebaseService: FirebaseService()),
-      child: const HistoryView(),
-    );
+    return const HistoryView();
   }
 }
 

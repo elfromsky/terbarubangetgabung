@@ -1,13 +1,14 @@
+import 'package:esh/app/app_dependencies.dart';
 import 'package:esh/bloc/bloc_observer.dart';
+import 'package:esh/bloc/history/history_bloc.dart';
 import 'package:esh/bloc/monitoring/monitoring_bloc.dart';
 import 'package:esh/bloc/monitoring/monitoring_event.dart';
 import 'package:esh/firebase_options.dart';
 import 'package:esh/routes/router.dart';
-import 'package:esh/services/firebase_service.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
-
+  
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
   Bloc.observer = AppBlocObserver();
@@ -86,25 +87,36 @@ class _FirebaseBootstrapState extends State<FirebaseBootstrap> {
           );
         }
 
-        return const EshApp();
+        return EshApp(dependencies: AppDependencies.firebase());
       },
     );
   }
 }
 
 class EshApp extends StatelessWidget {
-  const EshApp({super.key});
+  final AppDependencies dependencies;
+
+  const EshApp({super.key, required this.dependencies});
 
   @override
   Widget build(BuildContext context) {
-    return BlocProvider<MonitoringBloc>(
-      create: (context) =>
-          MonitoringBloc(firebaseService: FirebaseService())
-            ..add(StartMonitoring()),
+    return MultiBlocProvider(
+      providers: [
+        BlocProvider<MonitoringBloc>(
+          create: (context) =>
+              dependencies.createMonitoringBloc()..add(StartMonitoring()),
+        ),
+        BlocProvider<HistoryBloc>(
+          create: (context) => dependencies.createHistoryBloc(),
+        ),
+      ],
       child: MaterialApp.router(
         debugShowCheckedModeBanner: false,
         title: 'Monel Monitoring App',
-        routerConfig: router,
+        routerConfig: createRouter(
+          estimateEnergyCost: dependencies.estimateEnergyCost,
+          estimateEmission: dependencies.estimateEmission,
+        ),
       ),
     );
   }

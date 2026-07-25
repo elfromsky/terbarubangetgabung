@@ -1,14 +1,16 @@
 import 'package:esh/bloc/history/history_event.dart';
 import 'package:esh/bloc/history/history_state.dart';
-import 'package:esh/models/model.dart';
-import 'package:esh/services/firebase_service.dart';
+import 'package:esh/features/history/domain/usecases/load_history_data_use_case.dart';
+import 'package:esh/features/history/presentation/models/chart_point.dart';
+import 'package:esh/features/history/presentation/models/history_chart_data.dart';
+import 'package:esh/features/history/domain/entities/historical_mcb_data.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
 class HistoryBloc extends Bloc<HistoryEvent, HistoryState> {
-  final HistoryRepository firebaseService;
+  final LoadHistoryDataUseCase loadHistoryData;
   int _requestSequence = 0;
 
-  HistoryBloc({required this.firebaseService}) : super(HistoryInitial()) {
+  HistoryBloc({required this.loadHistoryData}) : super(HistoryInitial()) {
     on<LoadHistoryData>(_onLoadHistoryData);
     on<FilterHistoryData>(_onFilterHistoryData);
     on<RefreshHistoryData>(_onRefreshHistoryData);
@@ -22,7 +24,7 @@ class HistoryBloc extends Bloc<HistoryEvent, HistoryState> {
     emit(HistoryLoading());
 
     try {
-      final rawData = await firebaseService.getHistoricalData(
+      final rawData = await loadHistoryData(
         startDate: event.startDate,
         endDate: event.endDate,
         limit: event.limit ?? 2000,
@@ -208,42 +210,5 @@ class HistoryBloc extends Bloc<HistoryEvent, HistoryState> {
       temperatureData: temperatureData,
       humidityData: humidityData,
     );
-  }
-}
-
-class HistoryChartData {
-  final List<ChartPoint> voltageData;
-  final List<ChartPoint> currentData;
-  final List<ChartPoint> powerData;
-  final List<ChartPoint> energyData;
-  final List<ChartPoint> temperatureData;
-  final List<ChartPoint> humidityData;
-
-  HistoryChartData({
-    required this.voltageData,
-    required this.currentData,
-    required this.powerData,
-    required this.energyData,
-    required this.temperatureData,
-    required this.humidityData,
-  });
-}
-
-class ChartPoint {
-  final double x;
-  final double y;
-  final String mcbName;
-  final DateTime timestamp;
-
-  ChartPoint({
-    required this.x,
-    required this.y,
-    required this.mcbName,
-    required this.timestamp,
-  });
-
-  @override
-  String toString() {
-    return 'ChartPoint(x: $x, y: $y, mcbName: $mcbName, timestamp: $timestamp)';
   }
 }

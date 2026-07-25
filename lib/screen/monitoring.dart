@@ -1,7 +1,15 @@
 import 'package:esh/bloc/monitoring/monitoring_bloc.dart';
 import 'package:esh/bloc/monitoring/monitoring_event.dart';
 import 'package:esh/bloc/monitoring/monitoring_state.dart';
-import 'package:esh/models/model.dart';
+import 'package:esh/features/monitoring/domain/entities/mcb_data.dart';
+import 'package:esh/features/monitoring/domain/entities/mcb_data_collection.dart';
+import 'package:esh/features/monitoring/domain/entities/room_device_collection.dart';
+import 'package:esh/features/monitoring/domain/entities/room_device_state.dart';
+import 'package:esh/features/monitoring/domain/entities/sensor_data.dart';
+import 'package:esh/features/monitoring/domain/usecases/estimate_emission_use_case.dart';
+import 'package:esh/features/monitoring/domain/usecases/estimate_energy_cost_use_case.dart';
+import 'package:esh/features/monitoring/presentation/mappers/device_control_view_mapper.dart';
+import 'package:esh/features/monitoring/presentation/models/device_control_view_state.dart';
 import 'package:esh/models/device_config.dart';
 import 'package:esh/widgets/appbar.dart';
 import 'package:esh/widgets/selector_page.dart';
@@ -10,22 +18,41 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:syncfusion_flutter_gauges/gauges.dart';
 
 class MonitoringPage extends StatelessWidget {
-  const MonitoringPage({super.key});
+  final EstimateEnergyCostUseCase estimateEnergyCost;
+  final EstimateEmissionUseCase estimateEmission;
+
+  const MonitoringPage({
+    super.key,
+    required this.estimateEnergyCost,
+    required this.estimateEmission,
+  });
 
   @override
   Widget build(BuildContext context) {
-    return const MonitoringView();
+    return MonitoringView(
+      estimateEnergyCost: estimateEnergyCost,
+      estimateEmission: estimateEmission,
+    );
   }
 }
 
 class MonitoringView extends StatefulWidget {
-  const MonitoringView({super.key});
+  final EstimateEnergyCostUseCase estimateEnergyCost;
+  final EstimateEmissionUseCase estimateEmission;
+
+  const MonitoringView({
+    super.key,
+    required this.estimateEnergyCost,
+    required this.estimateEmission,
+  });
 
   @override
   State<MonitoringView> createState() => _MonitoringViewState();
 }
 
 class _MonitoringViewState extends State<MonitoringView> {
+  EstimateEnergyCostUseCase get estimateEnergyCost => widget.estimateEnergyCost;
+  EstimateEmissionUseCase get estimateEmission => widget.estimateEmission;
   String _selectedCategory = 'Listrik';
 
   @override
@@ -83,12 +110,12 @@ class _MonitoringViewState extends State<MonitoringView> {
                   }
 
                   if (state is MonitoringLoaded) {
-                    const double electricityRate = 1699.53;
-                    const double emissionFactor = 0.85;
-                    final double totalEstimatedCost =
-                        state.mcbData.mcb1.energy * electricityRate;
-                    final double totalEstimatedEmissions =
-                        state.mcbData.mcb1.energy * emissionFactor;
+                    final totalEstimatedCost = estimateEnergyCost(
+                      energyKwh: state.mcbData.totalEnergy,
+                    );
+                    final totalEstimatedEmissions = estimateEmission(
+                      energyKwh: state.mcbData.totalEnergy,
+                    );
                     return SingleChildScrollView(
                       padding: const EdgeInsets.all(16.0),
                       child: Column(
@@ -140,7 +167,11 @@ class _MonitoringViewState extends State<MonitoringView> {
                               'Suhu & Kelembapan') ...[
                             _buildSensorSection(state.mcbData.sensorData),
                           ] else ...[
-                            _buildElektronikSection(context),
+                            _buildElektronikSection(
+                              state.deviceData,
+                              state.pendingDevices,
+                              state.commandErrors,
+                            ),
                           ],
                         ],
                       ),
@@ -300,16 +331,21 @@ class _MonitoringViewState extends State<MonitoringView> {
     }
   }
 
-  Widget _buildElektronikSection(BuildContext context) {
+  Widget _buildElektronikSection(
+    RoomDeviceCollection deviceData,
+    Set<DeviceAddress> pendingDevices,
+    Map<DeviceAddress, String> commandErrors,
+  ) {
     return Column(
-      children: roomDeviceConfigs.map((rc) {
-        final dbData = context.watch<MonitoringBloc>().state;
-        final deviceData = dbData is MonitoringLoaded
-            ? dbData.deviceData
-            : <String, dynamic>{};
+      children: roomDeviceConfigs.map((roomConfig) {
         return Padding(
           padding: const EdgeInsets.only(bottom: 16),
-          child: _buildRoomElectronicCard(rc, deviceData),
+          child: _buildRoomElectronicCard(
+            roomConfig,
+            deviceData,
+            pendingDevices,
+            commandErrors,
+          ),
         );
       }).toList(),
     );
@@ -317,7 +353,9 @@ class _MonitoringViewState extends State<MonitoringView> {
 
   Widget _buildRoomElectronicCard(
     RoomDeviceConfig roomConfig,
-    Map<String, dynamic> dbData,
+    RoomDeviceCollection deviceData,
+    Set<DeviceAddress> pendingDevices,
+    Map<DeviceAddress, String> commandErrors,
   ) {
     return Container(
       padding: const EdgeInsets.all(16),
@@ -341,19 +379,20 @@ class _MonitoringViewState extends State<MonitoringView> {
           ),
           const SizedBox(height: 16),
           ...roomConfig.devices.map((device) {
-            final node =
-                dbData['rooms']?[roomConfig.roomKey]?[device.deviceKey];
-            final isOn = node is bool
-                ? node
-                : (node is Map ? node['state'] == true : false);
-            final brightness = node is Map
-                ? (node['brightness'] ?? 0) as int
-                : 0;
+            final address = DeviceAddress(
+              roomKey: roomConfig.roomKey,
+              deviceKey: device.deviceKey,
+            );
+            final viewState = mapDeviceControlViewState(
+              visibleDevices: deviceData,
+              address: address,
+              isPending: pendingDevices.contains(address),
+              errorMessage: commandErrors[address],
+            );
             return DeviceStatusCard(
               name: device.displayName,
               supportsBrightness: device.supportsBrightness,
-              isOn: isOn,
-              brightness: brightness,
+              viewState: viewState,
             );
           }),
         ],
@@ -616,84 +655,116 @@ class _MonitoringViewState extends State<MonitoringView> {
 class DeviceStatusCard extends StatelessWidget {
   final String name;
   final bool supportsBrightness;
-  final bool isOn;
-  final int brightness;
+  final DeviceControlViewState viewState;
 
   const DeviceStatusCard({
     super.key,
     required this.name,
+    required this.viewState,
     this.supportsBrightness = false,
-    this.isOn = false,
-    this.brightness = 0,
   });
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 12.0),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Expanded(
-            child: Row(
-              children: [
-                Icon(
-                  supportsBrightness
-                      ? Icons.lightbulb_outline
-                      : Icons.power_rounded,
-                  color: isOn ? Colors.amber : Colors.grey,
-                  size: 20,
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Text(
-                    name,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(color: Colors.white, fontSize: 14),
-                  ),
-                ),
-              ],
+    final label = _statusLabel(viewState);
+    final color = _statusColor(viewState.phase);
+    final icon = _statusIcon(viewState.phase);
+    final brightness = viewState.value?.brightness;
+
+    return Semantics(
+      container: true,
+      label: '$name, $label',
+      value: label,
+      child: Padding(
+        padding: const EdgeInsets.only(bottom: 12),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            Icon(icon, color: color, size: 20),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                name,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(color: Colors.white, fontSize: 14),
+              ),
             ),
-          ),
-          const SizedBox(width: 8),
-          Row(
-            children: [
-              if (supportsBrightness) ...[
-                Text(
-                  isOn ? '$brightness%' : '-',
-                  style: const TextStyle(color: Colors.white70, fontSize: 12),
-                ),
-                const SizedBox(width: 12),
-              ],
-              Container(
+            const SizedBox(width: 8),
+            if (supportsBrightness && brightness != null) ...[
+              Text(
+                '$brightness%',
+                style: const TextStyle(color: Colors.white70, fontSize: 12),
+              ),
+              const SizedBox(width: 12),
+            ],
+            Flexible(
+              child: Container(
                 padding: const EdgeInsets.symmetric(
                   horizontal: 10,
                   vertical: 4,
                 ),
                 decoration: BoxDecoration(
-                  color: isOn
-                      ? Colors.green.withValues(alpha: 0.2)
-                      : Colors.red.withValues(alpha: 0.2),
+                  color: color.withValues(alpha: 0.2),
                   borderRadius: BorderRadius.circular(8),
-                  border: Border.all(
-                    color: isOn ? Colors.green : Colors.red,
-                    width: 1,
-                  ),
+                  border: Border.all(color: color, width: 1),
                 ),
-                child: Text(
-                  isOn ? 'Nyala' : 'Mati',
-                  style: TextStyle(
-                    color: isOn ? Colors.green : Colors.red,
-                    fontSize: 12,
-                    fontWeight: FontWeight.bold,
-                  ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (viewState.phase == DeviceControlPhase.pending)
+                      const SizedBox(
+                        width: 14,
+                        height: 14,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      ),
+                    if (viewState.phase == DeviceControlPhase.pending)
+                      const SizedBox(width: 6),
+                    Flexible(
+                      child: Text(
+                        label,
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          color: color,
+                          fontSize: 12,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
               ),
-            ],
-          ),
-        ],
+            ),
+          ],
+        ),
       ),
     );
+  }
+
+  String _statusLabel(DeviceControlViewState state) {
+    if (state.phase == DeviceControlPhase.unknown) {
+      return 'Status belum tersedia';
+    }
+    if (state.phase == DeviceControlPhase.pending) return 'Menunggu konfirmasi';
+    if (state.phase == DeviceControlPhase.failed) {
+      return state.errorMessage ?? 'Perintah gagal';
+    }
+    return state.phase == DeviceControlPhase.on ? 'Nyala' : 'Mati';
+  }
+
+  Color _statusColor(DeviceControlPhase phase) {
+    if (phase == DeviceControlPhase.on) return Colors.green;
+    if (phase == DeviceControlPhase.off) return Colors.red;
+    if (phase == DeviceControlPhase.pending) return Colors.amber;
+    if (phase == DeviceControlPhase.failed) return Colors.redAccent;
+    return Colors.grey;
+  }
+
+  IconData _statusIcon(DeviceControlPhase phase) {
+    if (phase == DeviceControlPhase.on) return Icons.power;
+    if (phase == DeviceControlPhase.off) return Icons.power_off;
+    if (phase == DeviceControlPhase.pending) return Icons.sync;
+    if (phase == DeviceControlPhase.failed) return Icons.error_outline;
+    return Icons.help_outline;
   }
 }

@@ -1,3 +1,5 @@
+import 'package:esh/features/monitoring/domain/usecases/estimate_emission_use_case.dart';
+import 'package:esh/features/monitoring/domain/usecases/estimate_energy_cost_use_case.dart';
 import 'package:esh/routes/router_name.dart';
 import 'package:esh/screen/history.dart';
 import 'package:esh/screen/monitoring.dart';
@@ -24,25 +26,35 @@ CustomTransitionPage buildTransitionPage(Widget child, GoRouterState state) {
   );
 }
 
-final router = GoRouter(
-  routes: [
-    GoRoute(
-      path: '/',
-      name: Routes.monitoringScreen,
-      pageBuilder: (context, state) =>
-          buildTransitionPage(const MonitoringPage(), state),
-    ),
-    GoRoute(
-      path: '/history',
-      name: Routes.historyScreen,
-      pageBuilder: (context, state) =>
-          buildTransitionPage(const History(), state),
-    ),
-    GoRoute(
-      path: '/control',
-      name: Routes.controlScreen,
-      pageBuilder: (context, state) =>
-          buildTransitionPage(const ControlPage(), state),
-    ),
-  ],
-);
+GoRouter createRouter({
+  required EstimateEnergyCostUseCase estimateEnergyCost,
+  required EstimateEmissionUseCase estimateEmission,
+}) {
+  return GoRouter(
+    routes: [
+      GoRoute(
+        path: '/',
+        name: Routes.monitoringScreen,
+        pageBuilder: (context, state) => buildTransitionPage(
+          MonitoringPage(
+            estimateEnergyCost: estimateEnergyCost,
+            estimateEmission: estimateEmission,
+          ),
+          state,
+        ),
+      ),
+      GoRoute(
+        path: '/history',
+        name: Routes.historyScreen,
+        pageBuilder: (context, state) =>
+            buildTransitionPage(const History(), state),
+      ),
+      GoRoute(
+        path: '/control',
+        name: Routes.controlScreen,
+        pageBuilder: (context, state) =>
+            buildTransitionPage(const ControlPage(), state),
+      ),
+    ],
+  );
+}

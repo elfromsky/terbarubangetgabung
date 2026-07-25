@@ -5,6 +5,10 @@ import 'package:esh/widgets/selector_page.dart';
 import 'package:esh/bloc/monitoring/monitoring_bloc.dart';
 import 'package:esh/bloc/monitoring/monitoring_event.dart';
 import 'package:esh/bloc/monitoring/monitoring_state.dart';
+import 'package:esh/features/monitoring/domain/entities/room_device_collection.dart';
+import 'package:esh/features/monitoring/domain/entities/room_device_state.dart';
+import 'package:esh/features/monitoring/presentation/mappers/device_control_view_mapper.dart';
+import 'package:esh/features/monitoring/presentation/models/device_control_view_state.dart';
 import 'package:esh/models/device_config.dart';
 
 class ControlPage extends StatefulWidget {
@@ -84,15 +88,6 @@ class _ControlPageState extends State<ControlPage> {
                   if (state is! MonitoringLoaded) {
                     return const SizedBox.shrink();
                   }
-                  if (state.deviceData['rooms'] is! Map) {
-                    return const Center(
-                      child: Text(
-                        'Menunggu status perangkat...',
-                        style: TextStyle(color: Colors.white),
-                      ),
-                    );
-                  }
-
                   return SingleChildScrollView(
                     padding: const EdgeInsets.all(16.0),
                     child: Column(
@@ -128,43 +123,12 @@ class _ControlPageState extends State<ControlPage> {
     );
   }
 
-  dynamic _getDeviceNode(
-    Map<String, dynamic> dbData,
-    String roomKey,
-    String deviceKey,
-  ) {
-    return dbData['rooms']?[roomKey]?[deviceKey];
-  }
-
-  bool _getDeviceState(
-    Map<String, dynamic> dbData,
-    String roomKey,
-    String deviceKey,
-  ) {
-    final node = _getDeviceNode(dbData, roomKey, deviceKey);
-    if (node is bool) return node;
-    if (node is Map) return node['state'] == true;
-    return false;
-  }
-
-  int _getDeviceBrightness(
-    Map<String, dynamic> dbData,
-    String roomKey,
-    String deviceKey,
-  ) {
-    final node = _getDeviceNode(dbData, roomKey, deviceKey);
-    if (node is Map && node['brightness'] is num) {
-      return (node['brightness'] as num).toInt().clamp(0, 100);
-    }
-    return 0;
-  }
-
   Widget _buildRoomControlCard(
     RoomDeviceConfig roomConfig,
     List<DeviceConfig> devices,
-    Map<String, dynamic> dbData,
-    Set<String> pendingDevices,
-    Map<String, String> commandErrors,
+    RoomDeviceCollection deviceData,
+    Set<DeviceAddress> pendingDevices,
+    Map<DeviceAddress, String> commandErrors,
   ) {
     return Column(
       children: [
@@ -190,21 +154,20 @@ class _ControlPageState extends State<ControlPage> {
               ),
               const SizedBox(height: 16),
               ...devices.map((device) {
-                final isOn = _getDeviceState(
-                  dbData,
-                  roomConfig.roomKey,
-                  device.deviceKey,
+                final address = DeviceAddress(
+                  roomKey: roomConfig.roomKey,
+                  deviceKey: device.deviceKey,
                 );
-                final brightness = _getDeviceBrightness(
-                  dbData,
-                  roomConfig.roomKey,
-                  device.deviceKey,
+                final viewState = mapDeviceControlViewState(
+                  visibleDevices: deviceData,
+                  address: address,
+                  isPending: pendingDevices.contains(address),
+                  errorMessage: commandErrors[address],
                 );
                 return _buildStatusItem(
                   device.displayName,
                   device.supportsBrightness,
-                  isOn,
-                  brightness,
+                  viewState,
                 );
               }),
             ],
@@ -234,30 +197,26 @@ class _ControlPageState extends State<ControlPage> {
                 ],
               ),
               const SizedBox(height: 16),
-              ...devices.map(
-                (device) => _ControlActionWidget(
+              ...devices.map((device) {
+                final address = DeviceAddress(
+                  roomKey: roomConfig.roomKey,
+                  deviceKey: device.deviceKey,
+                );
+                final viewState = mapDeviceControlViewState(
+                  visibleDevices: deviceData,
+                  address: address,
+                  isPending: pendingDevices.contains(address),
+                  errorMessage: commandErrors[address],
+                );
+                return _ControlActionWidget(
                   roomName: roomConfig.displayName,
                   roomKey: roomConfig.roomKey,
                   name: device.displayName,
                   deviceKey: device.deviceKey,
                   supportsBrightness: device.supportsBrightness,
-                  firebaseBrightness: _getDeviceBrightness(
-                    dbData,
-                    roomConfig.roomKey,
-                    device.deviceKey,
-                  ),
-                  firebaseState: _getDeviceState(
-                    dbData,
-                    roomConfig.roomKey,
-                    device.deviceKey,
-                  ),
-                  isPending: pendingDevices.contains(
-                    '${roomConfig.roomKey}/${device.deviceKey}',
-                  ),
-                  commandError:
-                      commandErrors['${roomConfig.roomKey}/${device.deviceKey}'],
-                ),
-              ),
+                  viewState: viewState,
+                );
+              }),
             ],
           ),
         ),
@@ -268,75 +227,93 @@ class _ControlPageState extends State<ControlPage> {
   Widget _buildStatusItem(
     String name,
     bool supportsBrightness,
-    bool isOn,
-    int brightness,
+    DeviceControlViewState viewState,
   ) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 12.0),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Expanded(
-            child: Row(
-              children: [
-                Icon(
-                  supportsBrightness
-                      ? Icons.lightbulb_outline
-                      : Icons.power_rounded,
-                  color: isOn ? Colors.amber : Colors.grey,
-                  size: 20,
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Text(
-                    name,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(color: Colors.white, fontSize: 14),
-                  ),
-                ),
-              ],
+    final label = _statusLabel(viewState);
+    final color = _statusColor(viewState.phase);
+    final brightness = viewState.value?.brightness;
+
+    return Semantics(
+      container: true,
+      label: '$name, $label',
+      value: label,
+      child: Padding(
+        padding: const EdgeInsets.only(bottom: 12.0),
+        child: Row(
+          children: [
+            Icon(_statusIcon(viewState.phase), color: color, size: 20),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                name,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(color: Colors.white, fontSize: 14),
+              ),
             ),
-          ),
-          const SizedBox(width: 8),
-          Row(
-            children: [
-              if (supportsBrightness) ...[
-                Text(
-                  isOn ? '$brightness%' : '-',
-                  style: const TextStyle(color: Colors.white70, fontSize: 12),
-                ),
-                const SizedBox(width: 12),
-              ],
-              Container(
+            const SizedBox(width: 8),
+            if (supportsBrightness && brightness != null) ...[
+              Text(
+                '$brightness%',
+                style: const TextStyle(color: Colors.white70, fontSize: 12),
+              ),
+              const SizedBox(width: 12),
+            ],
+            Flexible(
+              child: Container(
                 padding: const EdgeInsets.symmetric(
                   horizontal: 10,
                   vertical: 4,
                 ),
                 decoration: BoxDecoration(
-                  color: isOn
-                      ? Colors.green.withValues(alpha: 0.2)
-                      : Colors.red.withValues(alpha: 0.2),
+                  color: color.withValues(alpha: 0.2),
                   borderRadius: BorderRadius.circular(8),
-                  border: Border.all(
-                    color: isOn ? Colors.green : Colors.red,
-                    width: 1,
-                  ),
+                  border: Border.all(color: color, width: 1),
                 ),
                 child: Text(
-                  isOn ? 'Nyala' : 'Mati',
+                  label,
+                  textAlign: TextAlign.end,
                   style: TextStyle(
-                    color: isOn ? Colors.green : Colors.red,
+                    color: color,
                     fontSize: 12,
                     fontWeight: FontWeight.bold,
                   ),
                 ),
               ),
-            ],
-          ),
-        ],
+            ),
+          ],
+        ),
       ),
     );
+  }
+
+  String _statusLabel(DeviceControlViewState state) {
+    if (state.phase == DeviceControlPhase.unknown) {
+      return 'Status belum tersedia';
+    }
+    if (state.phase == DeviceControlPhase.pending) {
+      return 'Menunggu konfirmasi';
+    }
+    if (state.phase == DeviceControlPhase.failed) {
+      return state.errorMessage ?? 'Perintah gagal';
+    }
+    return state.phase == DeviceControlPhase.on ? 'Nyala' : 'Mati';
+  }
+
+  Color _statusColor(DeviceControlPhase phase) {
+    if (phase == DeviceControlPhase.on) return Colors.green;
+    if (phase == DeviceControlPhase.off) return Colors.red;
+    if (phase == DeviceControlPhase.pending) return Colors.amber;
+    if (phase == DeviceControlPhase.failed) return Colors.redAccent;
+    return Colors.grey;
+  }
+
+  IconData _statusIcon(DeviceControlPhase phase) {
+    if (phase == DeviceControlPhase.on) return Icons.power;
+    if (phase == DeviceControlPhase.off) return Icons.power_off;
+    if (phase == DeviceControlPhase.pending) return Icons.sync;
+    if (phase == DeviceControlPhase.failed) return Icons.error_outline;
+    return Icons.help_outline;
   }
 
   BoxDecoration _cardStyle() {
@@ -354,10 +331,7 @@ class _ControlActionWidget extends StatefulWidget {
   final String name;
   final String deviceKey;
   final bool supportsBrightness;
-  final int firebaseBrightness;
-  final bool firebaseState;
-  final bool isPending;
-  final String? commandError;
+  final DeviceControlViewState viewState;
 
   const _ControlActionWidget({
     required this.roomName,
@@ -365,10 +339,7 @@ class _ControlActionWidget extends StatefulWidget {
     required this.name,
     required this.deviceKey,
     required this.supportsBrightness,
-    required this.firebaseBrightness,
-    required this.firebaseState,
-    required this.isPending,
-    required this.commandError,
+    required this.viewState,
   });
 
   @override
@@ -380,30 +351,32 @@ class _ControlActionWidgetState extends State<_ControlActionWidget> {
   bool _isEditing = false;
   bool _isOn = false;
 
+  void _syncFromViewState() {
+    final value = widget.viewState.value;
+    _localBrightness = value?.brightness?.toDouble() ?? 0;
+    _isOn = value?.isOn ?? false;
+  }
+
   @override
   void initState() {
     super.initState();
-    _localBrightness = widget.firebaseBrightness.toDouble();
-    _isOn = widget.firebaseState;
-    if (_localBrightness == 0 && _isOn) {
-      _localBrightness = 100;
-    }
+    _syncFromViewState();
   }
 
   @override
   void didUpdateWidget(covariant _ControlActionWidget oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (!_isEditing && !widget.isPending) {
-      _localBrightness = widget.firebaseBrightness.toDouble();
-      _isOn = widget.firebaseState;
-      if (_localBrightness == 0 && _isOn) {
-        _localBrightness = 100;
-      }
+    if (!_isEditing &&
+        !widget.viewState.isPending &&
+        widget.viewState.phase != DeviceControlPhase.pending) {
+      _syncFromViewState();
     }
   }
 
+  bool get _canInteract => widget.viewState.controlsEnabled;
+
   void _sendControlCommand(bool turnOn, double brightnessVal) {
-    if (widget.isPending) return;
+    if (!_canInteract) return;
 
     context.read<MonitoringBloc>().add(
       ControlRoomDevice(
@@ -468,7 +441,7 @@ class _ControlActionWidgetState extends State<_ControlActionWidget> {
                   ),
                 ),
               ),
-              if (widget.isPending)
+              if (widget.viewState.phase == DeviceControlPhase.pending)
                 const SizedBox(
                   width: 16,
                   height: 16,
@@ -476,11 +449,14 @@ class _ControlActionWidgetState extends State<_ControlActionWidget> {
                 ),
             ],
           ),
-          if (widget.commandError != null) ...[
+          if (widget.viewState.errorMessage != null) ...[
             const SizedBox(height: 4),
-            Text(
-              widget.commandError!,
-              style: const TextStyle(color: Colors.redAccent, fontSize: 12),
+            Semantics(
+              liveRegion: true,
+              child: Text(
+                widget.viewState.errorMessage!,
+                style: const TextStyle(color: Colors.redAccent, fontSize: 12),
+              ),
             ),
           ],
           const SizedBox(height: 8),
@@ -501,16 +477,16 @@ class _ControlActionWidgetState extends State<_ControlActionWidget> {
           children: [
             Expanded(
               child: ElevatedButton.icon(
-                onPressed: widget.isPending
-                    ? null
-                    : () {
+                onPressed: _canInteract
+                    ? () {
                         setState(() {
                           _isOn = true;
                           if (_localBrightness == 0) {
                             _localBrightness = 100;
                           }
                         });
-                      },
+                      }
+                    : null,
                 icon: Icon(
                   Icons.power,
                   color: _isOn ? Colors.white : Colors.white54,
@@ -533,14 +509,14 @@ class _ControlActionWidgetState extends State<_ControlActionWidget> {
             const SizedBox(width: 12),
             Expanded(
               child: ElevatedButton.icon(
-                onPressed: widget.isPending
-                    ? null
-                    : () {
+                onPressed: _canInteract
+                    ? () {
                         setState(() {
                           _isOn = false;
                           _localBrightness = 0;
                         });
-                      },
+                      }
+                    : null,
                 icon: Icon(
                   Icons.power_off,
                   color: !_isOn ? Colors.white : Colors.white54,
@@ -579,12 +555,12 @@ class _ControlActionWidgetState extends State<_ControlActionWidget> {
                 label: _localBrightness.toInt().toString(),
                 activeColor: _isOn ? Colors.amber : Colors.grey,
                 inactiveColor: Colors.white24,
-                onChangeStart: _isOn
+                onChangeStart: _canInteract && _isOn
                     ? (value) {
                         setState(() => _isEditing = true);
                       }
                     : null,
-                onChanged: _isOn
+                onChanged: _canInteract && _isOn
                     ? (value) {
                         setState(() {
                           _localBrightness = value;
@@ -613,11 +589,11 @@ class _ControlActionWidgetState extends State<_ControlActionWidget> {
             ),
             const SizedBox(width: 8),
             ElevatedButton(
-              onPressed: widget.isPending
-                  ? null
-                  : () {
+              onPressed: _canInteract
+                  ? () {
                       _sendControlCommand(_isOn, _localBrightness);
-                    },
+                    }
+                  : null,
               style: ElevatedButton.styleFrom(
                 backgroundColor: Colors.blue,
                 padding: const EdgeInsets.symmetric(
@@ -642,7 +618,7 @@ class _ControlActionWidgetState extends State<_ControlActionWidget> {
       children: [
         Expanded(
           child: ElevatedButton.icon(
-            onPressed: widget.isPending ? null : () => _confirmToggle(true),
+            onPressed: _canInteract ? () => _confirmToggle(true) : null,
             icon: const Icon(Icons.power, color: Colors.white, size: 16),
             label: const Text(
               'Nyalakan',
@@ -657,7 +633,7 @@ class _ControlActionWidgetState extends State<_ControlActionWidget> {
         const SizedBox(width: 12),
         Expanded(
           child: ElevatedButton.icon(
-            onPressed: widget.isPending ? null : () => _confirmToggle(false),
+            onPressed: _canInteract ? () => _confirmToggle(false) : null,
             icon: const Icon(Icons.power_off, color: Colors.white, size: 16),
             label: const Text('Matikan', style: TextStyle(color: Colors.white)),
             style: ElevatedButton.styleFrom(

@@ -1,6 +1,12 @@
 import 'dart:async';
-import 'package:esh/models/model.dart';
-import 'package:esh/services/firebase_service.dart';
+
+import 'package:esh/features/monitoring/domain/entities/mcb_data_collection.dart';
+import 'package:esh/features/monitoring/domain/entities/room_device_collection.dart';
+import 'package:esh/features/monitoring/domain/entities/room_device_state.dart';
+import 'package:esh/features/monitoring/domain/usecases/control_room_device_use_case.dart';
+import 'package:esh/features/monitoring/domain/usecases/watch_connection_status_use_case.dart';
+import 'package:esh/features/monitoring/domain/usecases/watch_monitoring_data_use_case.dart';
+import 'package:esh/features/monitoring/domain/usecases/watch_room_devices_use_case.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'monitoring_event.dart';
 import 'monitoring_state.dart';
@@ -8,14 +14,22 @@ import 'monitoring_state.dart';
 class MonitoringBloc extends Bloc<MonitoringEvent, MonitoringState> {
   static const pendingCommandTimeout = Duration(seconds: 5);
 
-  final MonitoringRepository firebaseService;
+  final WatchMonitoringDataUseCase watchMonitoringData;
+  final WatchConnectionStatusUseCase watchConnectionStatus;
+  final WatchRoomDevicesUseCase watchRoomDevices;
+  final ControlRoomDeviceUseCase controlRoomDevice;
   StreamSubscription? _dataSubscription;
   StreamSubscription? _connectionSubscription;
   StreamSubscription? _deviceDataSubscription;
-  final Map<String, Timer> _pendingTimers = {};
+  final Map<DeviceAddress, Timer> _pendingTimers = {};
   bool _monitoringActive = false;
 
-  MonitoringBloc({required this.firebaseService}) : super(MonitoringInitial()) {
+  MonitoringBloc({
+    required this.watchMonitoringData,
+    required this.watchConnectionStatus,
+    required this.watchRoomDevices,
+    required this.controlRoomDevice,
+  }) : super(MonitoringInitial()) {
     on<StartMonitoring>(_onStartMonitoring);
     on<StopMonitoring>(_onStopMonitoring);
     on<DataUpdated>(_onDataUpdated);
@@ -34,19 +48,23 @@ class MonitoringBloc extends Bloc<MonitoringEvent, MonitoringState> {
     final currentState = state;
     if (currentState is! MonitoringLoaded) return;
 
-    final pendingKey = '${event.roomKey}/${event.deviceKey}';
-    if (currentState.pendingDevices.contains(pendingKey)) return;
+    final address = DeviceAddress(
+      roomKey: event.roomKey,
+      deviceKey: event.deviceKey,
+    );
+    if (currentState.pendingDevices.contains(address)) return;
 
-    final pendingDevices = Set<String>.from(currentState.pendingDevices)
-      ..add(pendingKey);
-    final commandErrors = Map<String, String>.from(currentState.commandErrors)
-      ..remove(pendingKey);
+    final pendingDevices = Set<DeviceAddress>.from(currentState.pendingDevices)
+      ..add(address);
+    final commandErrors = Map<DeviceAddress, String>.from(
+      currentState.commandErrors,
+    )..remove(address);
+    final normalizedBrightness = event.brightness.toInt().clamp(0, 100);
     final optimisticData = _buildOptimisticDeviceData(
       currentState.deviceData,
-      event.roomKey,
-      event.deviceKey,
+      address,
       event.isOn,
-      event.brightness,
+      normalizedBrightness,
       event.supportsBrightness,
     );
 
@@ -58,51 +76,37 @@ class MonitoringBloc extends Bloc<MonitoringEvent, MonitoringState> {
       ),
     );
 
-    _pendingTimers[pendingKey]?.cancel();
-    _pendingTimers[pendingKey] = Timer(pendingCommandTimeout, () {
-      if (!isClosed) add(ClearPendingCommand(pendingKey));
-    });
+    _pendingTimers[address]?.cancel();
 
     try {
-      await firebaseService.controlRoomDevice(
-        event.roomKey,
-        event.deviceKey,
-        event.isOn,
-        event.brightness.toInt(),
-        event.supportsBrightness,
+      await controlRoomDevice(
+        roomKey: event.roomKey,
+        deviceKey: event.deviceKey,
+        isOn: event.isOn,
+        brightness: normalizedBrightness,
+        supportsBrightness: event.supportsBrightness,
       );
+      _pendingTimers[address] = Timer(pendingCommandTimeout, () {
+        if (!isClosed) add(ClearPendingCommand(address));
+      });
     } catch (_) {
       if (!isClosed) {
-        add(CommandFailed(pendingKey, 'Perintah gagal dikirim'));
+        add(CommandFailed(address, 'Perintah gagal dikirim'));
       }
     }
   }
 
-  Map<String, dynamic> _buildOptimisticDeviceData(
-    Map<String, dynamic> currentData,
-    String roomKey,
-    String deviceKey,
+  RoomDeviceCollection _buildOptimisticDeviceData(
+    RoomDeviceCollection currentData,
+    DeviceAddress address,
     bool isOn,
-    double brightness,
+    int brightness,
     bool supportsBrightness,
   ) {
-    final data = Map<String, dynamic>.from(currentData);
-    final rooms = data['rooms'] is Map
-        ? Map<String, dynamic>.from(data['rooms'] as Map)
-        : <String, dynamic>{};
-    final room = rooms[roomKey] is Map
-        ? Map<String, dynamic>.from(rooms[roomKey] as Map)
-        : <String, dynamic>{};
-
-    room[deviceKey] = supportsBrightness
-        ? <String, dynamic>{
-            'state': isOn,
-            'brightness': isOn ? brightness.toInt().clamp(0, 100) : 0,
-          }
-        : isOn;
-    rooms[roomKey] = room;
-    data['rooms'] = rooms;
-    return data;
+    final value = supportsBrightness
+        ? RoomDeviceValue(isOn: isOn, brightness: isOn ? brightness : 0)
+        : RoomDeviceValue(isOn: isOn);
+    return currentData.set(address, value);
   }
 
   Future<void> _onStartMonitoring(
@@ -114,7 +118,7 @@ class MonitoringBloc extends Bloc<MonitoringEvent, MonitoringState> {
 
     try {
       await _cancelSubscriptions();
-      _dataSubscription = firebaseService.getMonitoringDataStream().listen(
+      _dataSubscription = watchMonitoringData().listen(
         (mcbData) => add(DataUpdated(mcbData)),
         onError: (Object error) {
           if (!isClosed) {
@@ -122,13 +126,13 @@ class MonitoringBloc extends Bloc<MonitoringEvent, MonitoringState> {
           }
         },
       );
-      _connectionSubscription = firebaseService.getConnectionStatus().listen(
+      _connectionSubscription = watchConnectionStatus().listen(
         (isConnected) => add(ConnectionStatusChanged(isConnected)),
         onError: (Object error) {
           if (!isClosed) add(ConnectionStatusChanged(false));
         },
       );
-      _deviceDataSubscription = firebaseService.getRoomDevicesStream().listen(
+      _deviceDataSubscription = watchRoomDevices().listen(
         (data) => add(DeviceStateUpdated(data)),
         onError: (Object error) {
           if (!isClosed) {
@@ -184,44 +188,40 @@ class MonitoringBloc extends Bloc<MonitoringEvent, MonitoringState> {
   ) {
     final currentState = state;
     if (currentState is! MonitoringLoaded) {
-      final confirmedData = _deepCopyMap(event.data);
       emit(
         MonitoringLoaded(
           mcbData: McbDataCollection.empty(),
           isConnected: false,
-          deviceData: confirmedData,
-          confirmedDeviceData: confirmedData,
+          deviceData: event.data,
+          confirmedDeviceData: event.data,
         ),
       );
       return;
     }
 
-    final confirmedData = _deepCopyMap(event.data);
-    final mergedData = _deepCopyMap(confirmedData);
-    final pendingDevices = Set<String>.from(currentState.pendingDevices);
-    final commandErrors = Map<String, String>.from(currentState.commandErrors);
+    var visibleData = event.data;
+    final pendingDevices = Set<DeviceAddress>.from(currentState.pendingDevices);
+    final commandErrors = Map<DeviceAddress, String>.from(
+      currentState.commandErrors,
+    );
 
-    for (final pendingKey in currentState.pendingDevices) {
-      final parts = pendingKey.split('/');
-      if (parts.length != 2) continue;
-      final roomKey = parts[0];
-      final deviceKey = parts[1];
-      final desired = _deviceNode(currentState.deviceData, roomKey, deviceKey);
-      final confirmed = _deviceNode(confirmedData, roomKey, deviceKey);
+    for (final address in currentState.pendingDevices) {
+      final desired = currentState.deviceData.find(address);
+      final confirmed = event.data.find(address);
 
-      if (_deviceValuesMatch(desired, confirmed)) {
-        pendingDevices.remove(pendingKey);
-        commandErrors.remove(pendingKey);
-        _pendingTimers.remove(pendingKey)?.cancel();
+      if (desired != null && desired == confirmed) {
+        pendingDevices.remove(address);
+        commandErrors.remove(address);
+        _pendingTimers.remove(address)?.cancel();
       } else if (desired != null) {
-        _setDeviceNode(mergedData, roomKey, deviceKey, desired);
+        visibleData = visibleData.set(address, desired);
       }
     }
 
     emit(
       currentState.copyWith(
-        deviceData: mergedData,
-        confirmedDeviceData: confirmedData,
+        deviceData: visibleData,
+        confirmedDeviceData: event.data,
         pendingDevices: pendingDevices,
         commandErrors: commandErrors,
       ),
@@ -234,15 +234,16 @@ class MonitoringBloc extends Bloc<MonitoringEvent, MonitoringState> {
   ) {
     final currentState = state;
     if (currentState is! MonitoringLoaded ||
-        !currentState.pendingDevices.contains(event.pendingKey)) {
+        !currentState.pendingDevices.contains(event.address)) {
       return;
     }
 
-    final pendingDevices = Set<String>.from(currentState.pendingDevices)
-      ..remove(event.pendingKey);
-    final commandErrors = Map<String, String>.from(currentState.commandErrors)
-      ..[event.pendingKey] = 'Perintah tidak dikonfirmasi perangkat';
-    _pendingTimers.remove(event.pendingKey)?.cancel();
+    final pendingDevices = Set<DeviceAddress>.from(currentState.pendingDevices)
+      ..remove(event.address);
+    final commandErrors = Map<DeviceAddress, String>.from(
+      currentState.commandErrors,
+    )..[event.address] = 'Perintah tidak dikonfirmasi perangkat';
+    _pendingTimers.remove(event.address)?.cancel();
 
     emit(
       currentState.copyWith(
@@ -257,11 +258,12 @@ class MonitoringBloc extends Bloc<MonitoringEvent, MonitoringState> {
     final currentState = state;
     if (currentState is! MonitoringLoaded) return;
 
-    final pendingDevices = Set<String>.from(currentState.pendingDevices)
-      ..remove(event.pendingKey);
-    final commandErrors = Map<String, String>.from(currentState.commandErrors)
-      ..[event.pendingKey] = event.message;
-    _pendingTimers.remove(event.pendingKey)?.cancel();
+    final pendingDevices = Set<DeviceAddress>.from(currentState.pendingDevices)
+      ..remove(event.address);
+    final commandErrors = Map<DeviceAddress, String>.from(
+      currentState.commandErrors,
+    )..[event.address] = event.message;
+    _pendingTimers.remove(event.address)?.cancel();
 
     emit(
       currentState.copyWith(
@@ -285,70 +287,16 @@ class MonitoringBloc extends Bloc<MonitoringEvent, MonitoringState> {
     }
   }
 
-  Map<String, dynamic> _restorePendingValues(
+  RoomDeviceCollection _restorePendingValues(
     MonitoringLoaded currentState,
-    Set<String> pendingDevices,
+    Set<DeviceAddress> pendingDevices,
   ) {
-    final data = _deepCopyMap(currentState.confirmedDeviceData);
-    for (final pendingKey in pendingDevices) {
-      final parts = pendingKey.split('/');
-      if (parts.length != 2) continue;
-      final desired = _deviceNode(currentState.deviceData, parts[0], parts[1]);
-      if (desired != null) {
-        _setDeviceNode(data, parts[0], parts[1], desired);
-      }
+    var data = currentState.confirmedDeviceData;
+    for (final address in pendingDevices) {
+      final desired = currentState.deviceData.find(address);
+      if (desired != null) data = data.set(address, desired);
     }
     return data;
-  }
-
-  dynamic _deviceNode(
-    Map<String, dynamic> data,
-    String roomKey,
-    String deviceKey,
-  ) {
-    final rooms = data['rooms'];
-    if (rooms is! Map) return null;
-    final room = rooms[roomKey];
-    if (room is! Map) return null;
-    return room[deviceKey];
-  }
-
-  void _setDeviceNode(
-    Map<String, dynamic> data,
-    String roomKey,
-    String deviceKey,
-    dynamic value,
-  ) {
-    final rooms = data['rooms'] is Map
-        ? Map<String, dynamic>.from(data['rooms'] as Map)
-        : <String, dynamic>{};
-    final room = rooms[roomKey] is Map
-        ? Map<String, dynamic>.from(rooms[roomKey] as Map)
-        : <String, dynamic>{};
-    room[deviceKey] = value is Map ? Map<String, dynamic>.from(value) : value;
-    rooms[roomKey] = room;
-    data['rooms'] = rooms;
-  }
-
-  bool _deviceValuesMatch(dynamic desired, dynamic confirmed) {
-    if (desired is bool && confirmed is bool) return desired == confirmed;
-    if (desired is Map && confirmed is Map) {
-      final desiredBrightness = desired['brightness'];
-      final confirmedBrightness = confirmed['brightness'];
-      return desired['state'] == confirmed['state'] &&
-          desiredBrightness is num &&
-          confirmedBrightness is num &&
-          desiredBrightness.toInt() == confirmedBrightness.toInt();
-    }
-    return false;
-  }
-
-  Map<String, dynamic> _deepCopyMap(Map<dynamic, dynamic> source) {
-    final result = <String, dynamic>{};
-    source.forEach((key, value) {
-      result[key.toString()] = value is Map ? _deepCopyMap(value) : value;
-    });
-    return result;
   }
 
   Future<void> _cancelSubscriptions() async {

@@ -1,4 +1,6 @@
-import 'package:esh/models/model.dart';
+import 'package:esh/features/monitoring/domain/entities/mcb_data_collection.dart';
+import 'package:esh/features/monitoring/domain/entities/room_device_collection.dart';
+import 'package:esh/features/monitoring/domain/entities/room_device_state.dart';
 
 abstract class MonitoringState {}
 
@@ -15,27 +17,35 @@ class MonitoringError extends MonitoringState {
 class MonitoringLoaded extends MonitoringState {
   final McbDataCollection mcbData;
   final bool isConnected;
-  final Map<String, dynamic> deviceData;
-  final Map<String, dynamic> confirmedDeviceData;
-  final Set<String> pendingDevices;
-  final Map<String, String> commandErrors;
+  final RoomDeviceCollection deviceData;
+  final RoomDeviceCollection confirmedDeviceData;
+  final Set<DeviceAddress> pendingDevices;
+  final Map<DeviceAddress, String> commandErrors;
 
   MonitoringLoaded({
     required this.mcbData,
     required this.isConnected,
-    this.deviceData = const {},
-    this.confirmedDeviceData = const {},
-    this.pendingDevices = const {},
-    this.commandErrors = const {},
-  });
+    RoomDeviceCollection? deviceData,
+    RoomDeviceCollection? confirmedDeviceData,
+    Set<DeviceAddress>? pendingDevices,
+    Map<DeviceAddress, String>? commandErrors,
+  }) : deviceData = deviceData ?? RoomDeviceCollection.empty(),
+       confirmedDeviceData =
+           confirmedDeviceData ?? RoomDeviceCollection.empty(),
+       pendingDevices = Set<DeviceAddress>.unmodifiable(
+         pendingDevices ?? const {},
+       ),
+       commandErrors = Map<DeviceAddress, String>.unmodifiable(
+         commandErrors ?? const {},
+       );
 
   MonitoringLoaded copyWith({
     McbDataCollection? mcbData,
     bool? isConnected,
-    Map<String, dynamic>? deviceData,
-    Map<String, dynamic>? confirmedDeviceData,
-    Set<String>? pendingDevices,
-    Map<String, String>? commandErrors,
+    RoomDeviceCollection? deviceData,
+    RoomDeviceCollection? confirmedDeviceData,
+    Set<DeviceAddress>? pendingDevices,
+    Map<DeviceAddress, String>? commandErrors,
   }) {
     return MonitoringLoaded(
       mcbData: mcbData ?? this.mcbData,

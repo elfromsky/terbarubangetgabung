@@ -1,6 +1,5 @@
-import 'package:esh/models/model.dart';
-
-import 'history_bloc.dart';
+import 'package:esh/features/history/presentation/models/history_chart_data.dart';
+import 'package:esh/features/history/domain/entities/historical_mcb_data.dart';
 
 abstract class HistoryState {}
 
