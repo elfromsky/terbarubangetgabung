@@ -301,8 +301,12 @@ void main() {
 
       for (final file in files) {
         final source = readProjectFile(file);
-        expect(source, contains('RoomDeviceCollection'), reason: file);
         expect(source, contains('DeviceAddress'), reason: file);
+        if (file.endsWith('monitoring_bloc.dart')) {
+          expect(source, contains('DeviceStateUpdated'), reason: file);
+        } else {
+          expect(source, contains('RoomDeviceCollection'), reason: file);
+        }
         for (final forbiddenToken in forbiddenTokens) {
           expect(source, isNot(contains(forbiddenToken)), reason: file);
         }
@@ -371,6 +375,7 @@ void main() {
 
       expect(mapper, contains("rawValue['state']"));
       expect(mapper, contains("rawValue['brightness']"));
+      expect(mapper, contains("roomValue['tools']"));
       expect(dataSource, isNot(contains("['state']")));
       expect(dataSource, isNot(contains("['brightness']")));
       expect(dataSource, contains("child('rooms')"));

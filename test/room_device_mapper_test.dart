@@ -19,7 +19,7 @@ void main() {
     );
   });
 
-  test('state-only bool nodes map to typed on and off values', () {
+  test('legacy flat room nodes are ignored', () {
     final result = mapRoomDeviceCollectionDtoToEntity(
       const RoomDeviceCollectionDto(
         rawValue: {
@@ -28,14 +28,7 @@ void main() {
       ),
     );
 
-    expect(
-      result.find(const DeviceAddress(roomKey: 'teras', deviceKey: 'lampu')),
-      const RoomDeviceValue(isOn: true),
-    );
-    expect(
-      result.find(const DeviceAddress(roomKey: 'teras', deviceKey: 'sanyo')),
-      const RoomDeviceValue(isOn: false),
-    );
+    expect(result.values, isEmpty);
   });
 
   test('state-only object nodes map without brightness', () {
@@ -43,7 +36,10 @@ void main() {
       const RoomDeviceCollectionDto(
         rawValue: {
           'lorong': {
-            'blower': {'state': true, 'lastUpdate': 123, 'source': 'master'},
+            'source': 'slave',
+            'tools': {
+              'blower': {'state': true, 'lastUpdate': 123},
+            },
           },
         },
       ),
@@ -60,7 +56,10 @@ void main() {
       const RoomDeviceCollectionDto(
         rawValue: {
           'kamar_1': {
-            'lampu': {'state': false, 'brightness': 0},
+            'source': 'slave',
+            'tools': {
+              'lampu': {'state': false, 'brightness': 0},
+            },
           },
         },
       ),
@@ -79,11 +78,14 @@ void main() {
         const RoomDeviceCollectionDto(
           rawValue: {
             'dapur': {
-              'int': {'state': true, 'brightness': 40},
-              'double': {'state': true, 'brightness': 50.9},
-              'string': {'state': true, 'brightness': '75'},
-              'high': {'state': true, 'brightness': 125},
-              'low': {'state': false, 'brightness': -5},
+              'source': 'slave',
+              'tools': {
+                'int': {'state': true, 'brightness': 40},
+                'double': {'state': true, 'brightness': 50.9},
+                'string': {'state': true, 'brightness': '75'},
+                'high': {'state': true, 'brightness': 125},
+                'low': {'state': false, 'brightness': -5},
+              },
             },
           },
         ),
@@ -130,10 +132,13 @@ void main() {
           rawValue: {
             'invalidRoom': 'invalid',
             'dapur': {
-              'missingBrightness': {'state': true},
-              'invalidState': {'state': 'true', 'brightness': 50},
-              'invalidBrightness': {'state': true, 'brightness': 'none'},
-              'valid': true,
+              'source': 'slave',
+              'tools': {
+                'stateOnly': {'state': true},
+                'invalidState': {'state': 'true', 'brightness': 50},
+                'invalidBrightness': {'state': true, 'brightness': 'none'},
+                'legacyBool': true,
+              },
             },
           },
         ),
@@ -147,9 +152,9 @@ void main() {
       );
       expect(
         result.find(
-          const DeviceAddress(roomKey: 'dapur', deviceKey: 'missingBrightness'),
+          const DeviceAddress(roomKey: 'dapur', deviceKey: 'stateOnly'),
         ),
-        isNull,
+        const RoomDeviceValue(isOn: true),
       );
       expect(
         result.find(
@@ -164,8 +169,10 @@ void main() {
         isNull,
       );
       expect(
-        result.find(const DeviceAddress(roomKey: 'dapur', deviceKey: 'valid')),
-        const RoomDeviceValue(isOn: true),
+        result.find(
+          const DeviceAddress(roomKey: 'dapur', deviceKey: 'legacyBool'),
+        ),
+        isNull,
       );
     },
   );

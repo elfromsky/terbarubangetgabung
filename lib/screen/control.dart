@@ -209,6 +209,7 @@ class _ControlPageState extends State<ControlPage> {
                   errorMessage: commandErrors[address],
                 );
                 return _ControlActionWidget(
+                  key: ValueKey('${roomConfig.roomKey}/${device.deviceKey}'),
                   roomName: roomConfig.displayName,
                   roomKey: roomConfig.roomKey,
                   name: device.displayName,
@@ -334,6 +335,7 @@ class _ControlActionWidget extends StatefulWidget {
   final DeviceControlViewState viewState;
 
   const _ControlActionWidget({
+    super.key,
     required this.roomName,
     required this.roomKey,
     required this.name,
@@ -353,8 +355,9 @@ class _ControlActionWidgetState extends State<_ControlActionWidget> {
 
   void _syncFromViewState() {
     final value = widget.viewState.value;
-    _localBrightness = value?.brightness?.toDouble() ?? 0;
     _isOn = value?.isOn ?? false;
+    _localBrightness = value?.brightness?.toDouble() ?? 0;
+    if (_isOn && _localBrightness == 0) _localBrightness = 1;
   }
 
   @override
@@ -366,9 +369,7 @@ class _ControlActionWidgetState extends State<_ControlActionWidget> {
   @override
   void didUpdateWidget(covariant _ControlActionWidget oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (!_isEditing &&
-        !widget.viewState.isPending &&
-        widget.viewState.phase != DeviceControlPhase.pending) {
+    if (!_isEditing) {
       _syncFromViewState();
     }
   }
@@ -377,6 +378,10 @@ class _ControlActionWidgetState extends State<_ControlActionWidget> {
 
   void _sendControlCommand(bool turnOn, double brightnessVal) {
     if (!_canInteract) return;
+    var normalizedBrightness = brightnessVal.clamp(0, 100).toDouble();
+    if (widget.supportsBrightness && turnOn && normalizedBrightness == 0) {
+      normalizedBrightness = 1;
+    }
 
     context.read<MonitoringBloc>().add(
       ControlRoomDevice(
@@ -385,13 +390,13 @@ class _ControlActionWidgetState extends State<_ControlActionWidget> {
         deviceName: widget.name,
         deviceKey: widget.deviceKey,
         isOn: turnOn,
-        brightness: brightnessVal,
+        brightness: normalizedBrightness,
         supportsBrightness: widget.supportsBrightness,
       ),
     );
     setState(() {
       _isEditing = false;
-      _isOn = turnOn;
+      _syncFromViewState();
     });
   }
 
@@ -482,7 +487,7 @@ class _ControlActionWidgetState extends State<_ControlActionWidget> {
                         setState(() {
                           _isOn = true;
                           if (_localBrightness == 0) {
-                            _localBrightness = 100;
+                            _localBrightness = 1;
                           }
                         });
                       }
@@ -513,7 +518,6 @@ class _ControlActionWidgetState extends State<_ControlActionWidget> {
                     ? () {
                         setState(() {
                           _isOn = false;
-                          _localBrightness = 0;
                         });
                       }
                     : null,
@@ -549,15 +553,20 @@ class _ControlActionWidgetState extends State<_ControlActionWidget> {
             Expanded(
               child: Slider(
                 value: _localBrightness,
-                min: 0,
+                min: _isOn ? 1 : 0,
                 max: 100,
-                divisions: 100,
+                divisions: _isOn ? 99 : 100,
                 label: _localBrightness.toInt().toString(),
                 activeColor: _isOn ? Colors.amber : Colors.grey,
                 inactiveColor: Colors.white24,
                 onChangeStart: _canInteract && _isOn
                     ? (value) {
                         setState(() => _isEditing = true);
+                      }
+                    : null,
+                onChangeEnd: _canInteract && _isOn
+                    ? (value) {
+                        setState(() => _isEditing = false);
                       }
                     : null,
                 onChanged: _canInteract && _isOn

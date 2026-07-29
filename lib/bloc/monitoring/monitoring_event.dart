@@ -48,8 +48,9 @@ class DeviceStateUpdated extends MonitoringEvent {
 
 class ClearPendingCommand extends MonitoringEvent {
   final DeviceAddress address;
+  final int generation;
 
-  ClearPendingCommand(this.address);
+  ClearPendingCommand(this.address, [this.generation = 0]);
 }
 
 class MonitoringStreamFailed extends MonitoringEvent {
@@ -61,6 +62,7 @@ class MonitoringStreamFailed extends MonitoringEvent {
 class CommandFailed extends MonitoringEvent {
   final DeviceAddress address;
   final String message;
+  final int generation;
 
-  CommandFailed(this.address, this.message);
+  CommandFailed(this.address, this.message, [this.generation = 0]);
 }

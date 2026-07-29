@@ -33,17 +33,11 @@ class FakeMonitoringDataSource implements MonitoringDataSource {
 
 class FakeRoomDeviceDataSource implements RoomDeviceDataSource {
   final roomController = StreamController<RoomDeviceCollectionDto>.broadcast();
-  List<Object>? command;
+  List<RoomDeviceCommandDto>? commands;
 
   @override
-  Future<void> controlRoomDevice(
-    String roomKey,
-    String deviceKey,
-    bool isOn,
-    int brightness,
-    bool supportsBrightness,
-  ) async {
-    command = [roomKey, deviceKey, isOn, brightness, supportsBrightness];
+  Future<void> controlRoomDevices(List<RoomDeviceCommandDto> commands) async {
+    this.commands = commands;
   }
 
   @override
@@ -73,7 +67,7 @@ class FakeHistoryDataSource implements HistoryDataSource {
 }
 
 void main() {
-  test('monitoring repository delegates command unchanged', () async {
+  test('monitoring repository delegates single command as DTO', () async {
     final monitoringDataSource = FakeMonitoringDataSource();
     final roomDeviceDataSource = FakeRoomDeviceDataSource();
     final repository = MonitoringRepositoryImpl(
@@ -83,10 +77,125 @@ void main() {
 
     await repository.controlRoomDevice('dapur', 'lampu', true, 75, true);
 
-    expect(roomDeviceDataSource.command, ['dapur', 'lampu', true, 75, true]);
+    expect(roomDeviceDataSource.commands, hasLength(1));
+    final command = roomDeviceDataSource.commands!.single;
+    expect(command.roomKey, 'dapur');
+    expect(command.deviceKey, 'lampu');
+    expect(command.isOn, isTrue);
+    expect(command.brightness, 75);
+    expect(command.supportsBrightness, isTrue);
 
     await monitoringDataSource.close();
     await roomDeviceDataSource.close();
+  });
+
+  test(
+    'shared bedroom brightness writes both leaves and preserves each state',
+    () async {
+      final monitoringDataSource = FakeMonitoringDataSource();
+      final roomDeviceDataSource = FakeRoomDeviceDataSource();
+      final repository = MonitoringRepositoryImpl(
+        monitoringDataSource: monitoringDataSource,
+        roomDeviceDataSource: roomDeviceDataSource,
+      );
+      final roomSubscription = repository.getRoomDevicesStream().listen((_) {});
+      addTearDown(roomSubscription.cancel);
+      addTearDown(monitoringDataSource.close);
+      addTearDown(roomDeviceDataSource.close);
+
+      roomDeviceDataSource.roomController.add(
+        const RoomDeviceCollectionDto(
+          rawValue: {
+            'kamar_1': {
+              'tools': {
+                'lampu': {'state': false, 'brightness': 20},
+              },
+            },
+            'kamar_2': {
+              'tools': {
+                'lampu': {'state': true, 'brightness': 20},
+              },
+            },
+          },
+        ),
+      );
+      await Future<void>.delayed(Duration.zero);
+
+      await repository.controlRoomDevice('kamar_1', 'lampu', true, 60, true);
+
+      expect(roomDeviceDataSource.commands, hasLength(2));
+      final commands = {
+        for (final command in roomDeviceDataSource.commands!)
+          command.roomKey: command,
+      };
+      expect(commands['kamar_1']!.isOn, isTrue);
+      expect(commands['kamar_1']!.brightness, 60);
+      expect(commands['kamar_2']!.isOn, isTrue);
+      expect(commands['kamar_2']!.brightness, 60);
+    },
+  );
+
+  test(
+    'shared bedroom brightness is rejected when pair state is unknown',
+    () async {
+      final monitoringDataSource = FakeMonitoringDataSource();
+      final roomDeviceDataSource = FakeRoomDeviceDataSource();
+      final repository = MonitoringRepositoryImpl(
+        monitoringDataSource: monitoringDataSource,
+        roomDeviceDataSource: roomDeviceDataSource,
+      );
+
+      expect(
+        () => repository.controlRoomDevice('kamar_1', 'lampu', false, 35, true),
+        throwsA(isA<StateError>()),
+      );
+      expect(roomDeviceDataSource.commands, isNull);
+
+      await monitoringDataSource.close();
+      await roomDeviceDataSource.close();
+    },
+  );
+
+  test('shared bedroom state change keeps pair brightness atomic', () async {
+    final monitoringDataSource = FakeMonitoringDataSource();
+    final roomDeviceDataSource = FakeRoomDeviceDataSource();
+    final repository = MonitoringRepositoryImpl(
+      monitoringDataSource: monitoringDataSource,
+      roomDeviceDataSource: roomDeviceDataSource,
+    );
+    final roomSubscription = repository.getRoomDevicesStream().listen((_) {});
+    addTearDown(roomSubscription.cancel);
+    addTearDown(monitoringDataSource.close);
+    addTearDown(roomDeviceDataSource.close);
+    roomDeviceDataSource.roomController.add(
+      const RoomDeviceCollectionDto(
+        rawValue: {
+          'kamar_1': {
+            'tools': {
+              'lampu': {'state': true, 'brightness': 60},
+            },
+          },
+          'kamar_2': {
+            'tools': {
+              'lampu': {'state': true, 'brightness': 60},
+            },
+          },
+        },
+      ),
+    );
+    await Future<void>.delayed(Duration.zero);
+
+    await repository.controlRoomDevice('kamar_1', 'lampu', false, 60, true);
+
+    expect(roomDeviceDataSource.commands, hasLength(2));
+    final commands = {
+      for (final command in roomDeviceDataSource.commands!)
+        command.roomKey: command,
+    };
+    expect(commands['kamar_1']!.isOn, isFalse);
+    expect(commands['kamar_1']!.brightness, 60);
+    expect(commands['kamar_2']!.isOn, isTrue);
+    expect(commands['kamar_2']!.brightness, 60);
   });
 
   test(
@@ -111,7 +220,10 @@ void main() {
       const roomDevicesValue = RoomDeviceCollectionDto(
         rawValue: {
           'dapur': {
-            'lampu': {'state': true, 'brightness': 75},
+            'source': 'slave',
+            'tools': {
+              'lampu': {'state': true, 'brightness': 75},
+            },
           },
         },
       );

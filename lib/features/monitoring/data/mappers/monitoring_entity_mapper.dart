@@ -6,6 +6,7 @@ import 'package:esh/features/monitoring/domain/entities/mcb_data_collection.dart
 import 'package:esh/features/monitoring/domain/entities/sensor_data.dart';
 
 McbDataCollection mapRealtimeMonitoringDtoToEntity(RealtimeMonitoringDto dto) {
+  final environmentConnected = dto.environment['connected'] == true;
   return McbDataCollection(
     mcb1: McbData(
       connected: dto.power['connected'] == true,
@@ -15,17 +16,21 @@ McbDataCollection mapRealtimeMonitoringDtoToEntity(RealtimeMonitoringDto dto) {
       energy: parseFirebaseDouble(dto.power['energy']),
     ),
     sensorData: SensorData(
-      temperature: parseFirebaseDouble(dto.environment['temperature']),
-      humidity: parseFirebaseDouble(dto.environment['humidity']),
-      connected: dto.environment['connected'] == true,
+      temperature: environmentConnected
+          ? parseFirebaseDouble(dto.environment['temperature'])
+          : 0,
+      humidity: environmentConnected
+          ? parseFirebaseDouble(dto.environment['humidity'])
+          : 0,
+      connected: environmentConnected,
     ),
   );
 }
 
 SensorData mapSensorDataDtoToEntity(SensorDataDto dto) {
   return SensorData(
-    temperature: parseFirebaseDouble(dto.temperature),
-    humidity: parseFirebaseDouble(dto.humidity),
+    temperature: dto.connected ? parseFirebaseDouble(dto.temperature) : 0,
+    humidity: dto.connected ? parseFirebaseDouble(dto.humidity) : 0,
     connected: dto.connected,
   );
 }

@@ -20,43 +20,86 @@ void main() {
     },
   );
 
-  test('room device command uses canonical path and dimmable payload', () {
+  test('room device command uses canonical path and simple payload', () {
     expect(
       roomDeviceCommandPath('dapur', 'lampu'),
-      'commands/rooms/dapur/lampu',
+      'commands/rooms/dapur/tools/lampu',
     );
     expect(
       roomDeviceCommandPayload(
-        requestId: 'request-1',
-        createdAt: 123,
         isOn: true,
         brightness: 75,
         supportsBrightness: true,
       ),
-      {
-        'protocolVersion': 1,
-        'requestId': 'request-1',
-        'createdAt': 123,
-        'state': true,
-        'brightness': 75,
-      },
+      {'state': true, 'brightness': 75},
     );
   });
 
-  test('state-only command uses envelope without brightness', () {
+  test('state-only command contains only state', () {
     expect(
       roomDeviceCommandPayload(
-        requestId: 'request-2',
-        createdAt: 456,
         isOn: false,
         brightness: 0,
         supportsBrightness: false,
       ),
+      {'state': false},
+    );
+  });
+
+  test('dimmer payload clamps and normalizes on zero to one', () {
+    expect(
+      roomDeviceCommandPayload(
+        isOn: true,
+        brightness: 0,
+        supportsBrightness: true,
+      ),
+      {'state': true, 'brightness': 1},
+    );
+    expect(
+      roomDeviceCommandPayload(
+        isOn: true,
+        brightness: 150,
+        supportsBrightness: true,
+      ),
+      {'state': true, 'brightness': 100},
+    );
+  });
+
+  test('off dimmer retains supplied clamped brightness', () {
+    expect(
+      roomDeviceCommandPayload(
+        isOn: false,
+        brightness: 35,
+        supportsBrightness: true,
+      ),
+      {'state': false, 'brightness': 35},
+    );
+  });
+
+  test('bulk updates target both canonical command leaves', () {
+    expect(
+      roomDeviceCommandUpdates(const [
+        RoomDeviceCommandDto(
+          roomKey: 'kamar_1',
+          deviceKey: 'lampu',
+          isOn: true,
+          brightness: 60,
+          supportsBrightness: true,
+        ),
+        RoomDeviceCommandDto(
+          roomKey: 'kamar_2',
+          deviceKey: 'lampu',
+          isOn: false,
+          brightness: 60,
+          supportsBrightness: true,
+        ),
+      ]),
       {
-        'protocolVersion': 1,
-        'requestId': 'request-2',
-        'createdAt': 456,
-        'state': false,
+        'commands/rooms/kamar_1/tools/lampu': {'state': true, 'brightness': 60},
+        'commands/rooms/kamar_2/tools/lampu': {
+          'state': false,
+          'brightness': 60,
+        },
       },
     );
   });

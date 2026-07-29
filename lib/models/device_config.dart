@@ -43,24 +43,24 @@ const List<RoomDeviceConfig> roomDeviceConfigs = [
     displayName: 'Kamar 1',
     roomKey: 'kamar_1',
     devices: [
-      DeviceConfig(displayName: 'Stop Kontak', deviceKey: 'stop_kontak'),
       DeviceConfig(
         displayName: 'Lampu',
         deviceKey: 'lampu',
         supportsBrightness: true,
       ),
+      DeviceConfig(displayName: 'Stop Kontak', deviceKey: 'stop_kontak'),
     ],
   ),
   RoomDeviceConfig(
     displayName: 'Kamar 2',
     roomKey: 'kamar_2',
     devices: [
-      DeviceConfig(displayName: 'Stop Kontak', deviceKey: 'stop_kontak'),
       DeviceConfig(
         displayName: 'Lampu',
         deviceKey: 'lampu',
         supportsBrightness: true,
       ),
+      DeviceConfig(displayName: 'Stop Kontak', deviceKey: 'stop_kontak'),
     ],
   ),
   RoomDeviceConfig(

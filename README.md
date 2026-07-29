@@ -1,6 +1,6 @@
 # ESH Flutter
 
-Aplikasi Flutter untuk monitoring telemetry, melihat histori, dan mengontrol perangkat rumah melalui Firebase Realtime Database. Firmware `fullgabung` menjadi gateway Firebase/ESP-NOW master; firmware `fullgabung2` menjadi ESP-NOW slave.
+Aplikasi Flutter untuk monitoring telemetry, melihat histori, dan mengontrol perangkat rumah melalui Firebase Realtime Database. Firmware `mastergabung` menjadi gateway Firebase/ESP-NOW master; firmware `slavegabung` menjadi ESP-NOW slave.
 
 ## Urutan Dokumentasi dan Eksekusi
 
@@ -15,11 +15,11 @@ Urutan ini wajib karena status command Flutter bergantung pada ACK dan state wri
 ```text
 Flutter
   -> Firebase /commands
-  -> fullgabung master
+  -> mastergabung
   -> ESP-NOW
-  -> fullgabung2 slave
+  -> slavegabung
   -> ACK/status
-  -> fullgabung master
+  -> mastergabung
   -> Firebase /rooms
   -> Flutter
 ```
@@ -29,8 +29,8 @@ Flutter tidak terhubung langsung ke ESP-NOW.
 ## Firebase Path Aktif
 
 - telemetry: `/device/sensorData`
-- status perangkat: `/rooms/<roomKey>/<deviceKey>`
-- command: `/commands/rooms/<roomKey>/<deviceKey>`
+- status aktual perangkat: `/rooms/<roomKey>/tools/<deviceKey>`
+- desired state: `/commands/rooms/<roomKey>/tools/<deviceKey>`
 - connection: `/.info/connected`
 - history: Firestore collection `sensorLogs`
 
@@ -55,7 +55,11 @@ flutter build apk --debug
 ## Batasan Aktif
 
 - `kamar_1/lampu` dan `kamar_2/lampu` berbagi dimmer channel 1 pada slave, sehingga brightness hardware tidak independen.
+- ON/OFF kedua lampu kamar tetap independen. Perubahan brightness salah satunya ditulis atomik untuk keduanya.
 - `dapur/lampu` memakai dimmer channel 2.
-- Firebase write hanya berarti command masuk antrean backend. State perangkat dianggap confirmed setelah `/rooms/...` diperbarui master.
+- `/commands` menyimpan desired state terbaru dan tidak dihapus master. State perangkat dianggap aktual setelah `/rooms/...` diperbarui master.
+- UI ON/OFF dan brightness hanya mengikuti `/rooms`; write `/commands` hanya menampilkan pending.
+- Dimmer ON memakai brightness `1..100`. Saat OFF, brightness terakhir tetap disimpan.
+- Telemetry environment yang disconnected dinormalisasi menjadi temperature dan humidity `0`.
 - Status koneksi Firebase bukan status kesehatan gateway atau peer ESP-NOW.
 - Deployment rules, auth, release signing, dan validasi hardware dikelola terpisah sesuai lingkungan produksi.

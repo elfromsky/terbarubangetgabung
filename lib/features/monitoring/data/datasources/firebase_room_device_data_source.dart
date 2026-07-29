@@ -3,32 +3,58 @@ import 'package:firebase_database/firebase_database.dart';
 
 abstract interface class RoomDeviceDataSource {
   Stream<RoomDeviceCollectionDto> getRoomDevicesStream();
-  Future<void> controlRoomDevice(
-    String roomKey,
-    String deviceKey,
-    bool isOn,
-    int brightness,
-    bool supportsBrightness,
-  );
+  Future<void> controlRoomDevices(List<RoomDeviceCommandDto> commands);
+}
+
+class RoomDeviceCommandDto {
+  final String roomKey;
+  final String deviceKey;
+  final bool isOn;
+  final int brightness;
+  final bool supportsBrightness;
+
+  const RoomDeviceCommandDto({
+    required this.roomKey,
+    required this.deviceKey,
+    required this.isOn,
+    required this.brightness,
+    required this.supportsBrightness,
+  });
 }
 
 String roomDeviceCommandPath(String roomKey, String deviceKey) {
-  return 'commands/rooms/$roomKey/$deviceKey';
+  return 'commands/rooms/$roomKey/tools/$deviceKey';
 }
 
 Map<String, Object> roomDeviceCommandPayload({
-  required String requestId,
-  required Object createdAt,
   required bool isOn,
   required int brightness,
   required bool supportsBrightness,
 }) {
+  var normalizedBrightness = brightness.clamp(0, 100).toInt();
+  if (supportsBrightness && isOn && normalizedBrightness == 0) {
+    normalizedBrightness = 1;
+  }
+
   return {
-    'protocolVersion': 1,
-    'requestId': requestId,
-    'createdAt': createdAt,
     'state': isOn,
-    if (supportsBrightness) 'brightness': brightness,
+    if (supportsBrightness) 'brightness': normalizedBrightness,
+  };
+}
+
+Map<String, Object> roomDeviceCommandUpdates(
+  Iterable<RoomDeviceCommandDto> commands,
+) {
+  return {
+    for (final command in commands)
+      roomDeviceCommandPath(
+        command.roomKey,
+        command.deviceKey,
+      ): roomDeviceCommandPayload(
+        isOn: command.isOn,
+        brightness: command.brightness,
+        supportsBrightness: command.supportsBrightness,
+      ),
   };
 }
 
@@ -48,28 +74,9 @@ class FirebaseRoomDeviceDataSource implements RoomDeviceDataSource {
   }
 
   @override
-  Future<void> controlRoomDevice(
-    String roomKey,
-    String deviceKey,
-    bool isOn,
-    int brightness,
-    bool supportsBrightness,
-  ) async {
+  Future<void> controlRoomDevices(List<RoomDeviceCommandDto> commands) async {
     try {
-      final commandReference = database.child(
-        roomDeviceCommandPath(roomKey, deviceKey),
-      );
-      await commandReference.set(
-        roomDeviceCommandPayload(
-          requestId:
-              commandReference.push().key ??
-              '${DateTime.now().microsecondsSinceEpoch}',
-          createdAt: ServerValue.timestamp,
-          isOn: isOn,
-          brightness: brightness,
-          supportsBrightness: supportsBrightness,
-        ),
-      );
+      await database.update(roomDeviceCommandUpdates(commands));
     } catch (error) {
       throw Exception('Failed to control device: $error');
     }

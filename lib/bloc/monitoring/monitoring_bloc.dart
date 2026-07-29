@@ -1,7 +1,6 @@
 import 'dart:async';
 
 import 'package:esh/features/monitoring/domain/entities/mcb_data_collection.dart';
-import 'package:esh/features/monitoring/domain/entities/room_device_collection.dart';
 import 'package:esh/features/monitoring/domain/entities/room_device_state.dart';
 import 'package:esh/features/monitoring/domain/usecases/control_room_device_use_case.dart';
 import 'package:esh/features/monitoring/domain/usecases/watch_connection_status_use_case.dart';
@@ -22,6 +21,8 @@ class MonitoringBloc extends Bloc<MonitoringEvent, MonitoringState> {
   StreamSubscription? _connectionSubscription;
   StreamSubscription? _deviceDataSubscription;
   final Map<DeviceAddress, Timer> _pendingTimers = {};
+  final Map<DeviceAddress, int> _commandGenerations = {};
+  int _nextCommandGeneration = 0;
   bool _monitoringActive = false;
 
   MonitoringBloc({
@@ -54,29 +55,92 @@ class MonitoringBloc extends Bloc<MonitoringEvent, MonitoringState> {
     );
     if (currentState.pendingDevices.contains(address)) return;
 
+    if (!currentState.isConnected) {
+      final errors = Map<DeviceAddress, String>.from(currentState.commandErrors)
+        ..[address] = 'Firebase terputus. Perintah tidak dikirim';
+      emit(currentState.copyWith(commandErrors: errors));
+      return;
+    }
+
+    var normalizedBrightness = event.brightness.toInt().clamp(0, 100);
+    if (event.supportsBrightness && event.isOn && normalizedBrightness == 0) {
+      normalizedBrightness = 1;
+    }
+    final desiredValue = event.supportsBrightness
+        ? RoomDeviceValue(isOn: event.isOn, brightness: normalizedBrightness)
+        : RoomDeviceValue(isOn: event.isOn);
+    final desiredByAddress = <DeviceAddress, RoomDeviceValue>{
+      address: desiredValue,
+    };
+
+    final pairAddress = _sharedDimmerPair(address, event.supportsBrightness);
+    if (pairAddress != null) {
+      final pairValue = currentState.deviceData.find(pairAddress);
+      if (pairValue == null) {
+        final errors = Map<DeviceAddress, String>.from(
+          currentState.commandErrors,
+        )..[address] = 'Status lampu pasangan belum tersedia';
+        emit(currentState.copyWith(commandErrors: errors));
+        return;
+      }
+      if (currentState.pendingDevices.contains(pairAddress)) return;
+      desiredByAddress[pairAddress] = RoomDeviceValue(
+        isOn: pairValue.isOn,
+        brightness: normalizedBrightness,
+      );
+    }
+
+    if (desiredByAddress.entries.every(
+      (entry) => currentState.deviceData.find(entry.key) == entry.value,
+    )) {
+      final errors = Map<DeviceAddress, String>.from(currentState.commandErrors)
+        ..remove(address);
+      emit(currentState.copyWith(commandErrors: errors));
+      try {
+        await controlRoomDevice(
+          roomKey: event.roomKey,
+          deviceKey: event.deviceKey,
+          isOn: event.isOn,
+          brightness: normalizedBrightness,
+          supportsBrightness: event.supportsBrightness,
+        );
+      } catch (_) {
+        if (!isClosed) {
+          add(CommandFailed(address, 'Perintah gagal dikirim'));
+        }
+      }
+      return;
+    }
+
     final pendingDevices = Set<DeviceAddress>.from(currentState.pendingDevices)
-      ..add(address);
+      ..addAll(desiredByAddress.keys);
     final commandErrors = Map<DeviceAddress, String>.from(
       currentState.commandErrors,
-    )..remove(address);
-    final normalizedBrightness = event.brightness.toInt().clamp(0, 100);
-    final optimisticData = _buildOptimisticDeviceData(
-      currentState.deviceData,
-      address,
-      event.isOn,
-      normalizedBrightness,
-      event.supportsBrightness,
-    );
+    )..removeWhere((key, _) => desiredByAddress.containsKey(key));
+    final desiredDevices = Map<DeviceAddress, RoomDeviceValue>.from(
+      currentState.desiredDevices,
+    )..addAll(desiredByAddress);
+    final generations = <DeviceAddress, int>{};
+    for (final target in desiredByAddress.keys) {
+      final generation = ++_nextCommandGeneration;
+      _commandGenerations[target] = generation;
+      generations[target] = generation;
+    }
 
     emit(
       currentState.copyWith(
-        deviceData: optimisticData,
+        desiredDevices: desiredDevices,
         pendingDevices: pendingDevices,
         commandErrors: commandErrors,
       ),
     );
 
-    _pendingTimers[address]?.cancel();
+    for (final entry in generations.entries) {
+      _pendingTimers[entry.key]?.cancel();
+      _pendingTimers[entry.key] = Timer(pendingCommandTimeout, () {
+        if (!isClosed) add(ClearPendingCommand(entry.key, entry.value));
+      });
+    }
 
     try {
       await controlRoomDevice(
@@ -86,27 +150,27 @@ class MonitoringBloc extends Bloc<MonitoringEvent, MonitoringState> {
         brightness: normalizedBrightness,
         supportsBrightness: event.supportsBrightness,
       );
-      _pendingTimers[address] = Timer(pendingCommandTimeout, () {
-        if (!isClosed) add(ClearPendingCommand(address));
-      });
     } catch (_) {
       if (!isClosed) {
-        add(CommandFailed(address, 'Perintah gagal dikirim'));
+        for (final entry in generations.entries) {
+          add(CommandFailed(entry.key, 'Perintah gagal dikirim', entry.value));
+        }
       }
     }
   }
 
-  RoomDeviceCollection _buildOptimisticDeviceData(
-    RoomDeviceCollection currentData,
+  DeviceAddress? _sharedDimmerPair(
     DeviceAddress address,
-    bool isOn,
-    int brightness,
     bool supportsBrightness,
   ) {
-    final value = supportsBrightness
-        ? RoomDeviceValue(isOn: isOn, brightness: isOn ? brightness : 0)
-        : RoomDeviceValue(isOn: isOn);
-    return currentData.set(address, value);
+    if (!supportsBrightness || address.deviceKey != 'lampu') return null;
+    if (address.roomKey == 'kamar_1') {
+      return const DeviceAddress(roomKey: 'kamar_2', deviceKey: 'lampu');
+    }
+    if (address.roomKey == 'kamar_2') {
+      return const DeviceAddress(roomKey: 'kamar_1', deviceKey: 'lampu');
+    }
+    return null;
   }
 
   Future<void> _onStartMonitoring(
@@ -193,35 +257,37 @@ class MonitoringBloc extends Bloc<MonitoringEvent, MonitoringState> {
           mcbData: McbDataCollection.empty(),
           isConnected: false,
           deviceData: event.data,
-          confirmedDeviceData: event.data,
         ),
       );
       return;
     }
 
-    var visibleData = event.data;
     final pendingDevices = Set<DeviceAddress>.from(currentState.pendingDevices);
+    final desiredDevices = Map<DeviceAddress, RoomDeviceValue>.from(
+      currentState.desiredDevices,
+    );
     final commandErrors = Map<DeviceAddress, String>.from(
       currentState.commandErrors,
     );
 
-    for (final address in currentState.pendingDevices) {
-      final desired = currentState.deviceData.find(address);
+    for (final entry in currentState.desiredDevices.entries) {
+      final address = entry.key;
+      final desired = entry.value;
       final confirmed = event.data.find(address);
 
-      if (desired != null && desired == confirmed) {
+      if (desired == confirmed) {
         pendingDevices.remove(address);
+        desiredDevices.remove(address);
         commandErrors.remove(address);
         _pendingTimers.remove(address)?.cancel();
-      } else if (desired != null) {
-        visibleData = visibleData.set(address, desired);
+        _commandGenerations.remove(address);
       }
     }
 
     emit(
       currentState.copyWith(
-        deviceData: visibleData,
-        confirmedDeviceData: event.data,
+        deviceData: event.data,
+        desiredDevices: desiredDevices,
         pendingDevices: pendingDevices,
         commandErrors: commandErrors,
       ),
@@ -234,7 +300,9 @@ class MonitoringBloc extends Bloc<MonitoringEvent, MonitoringState> {
   ) {
     final currentState = state;
     if (currentState is! MonitoringLoaded ||
-        !currentState.pendingDevices.contains(event.address)) {
+        !currentState.pendingDevices.contains(event.address) ||
+        (event.generation != 0 &&
+            _commandGenerations[event.address] != event.generation)) {
       return;
     }
 
@@ -244,10 +312,10 @@ class MonitoringBloc extends Bloc<MonitoringEvent, MonitoringState> {
       currentState.commandErrors,
     )..[event.address] = 'Perintah tidak dikonfirmasi perangkat';
     _pendingTimers.remove(event.address)?.cancel();
+    _commandGenerations.remove(event.address);
 
     emit(
       currentState.copyWith(
-        deviceData: _restorePendingValues(currentState, pendingDevices),
         pendingDevices: pendingDevices,
         commandErrors: commandErrors,
       ),
@@ -256,7 +324,11 @@ class MonitoringBloc extends Bloc<MonitoringEvent, MonitoringState> {
 
   void _onCommandFailed(CommandFailed event, Emitter<MonitoringState> emit) {
     final currentState = state;
-    if (currentState is! MonitoringLoaded) return;
+    if (currentState is! MonitoringLoaded ||
+        (event.generation != 0 &&
+            _commandGenerations[event.address] != event.generation)) {
+      return;
+    }
 
     final pendingDevices = Set<DeviceAddress>.from(currentState.pendingDevices)
       ..remove(event.address);
@@ -264,10 +336,10 @@ class MonitoringBloc extends Bloc<MonitoringEvent, MonitoringState> {
       currentState.commandErrors,
     )..[event.address] = event.message;
     _pendingTimers.remove(event.address)?.cancel();
+    _commandGenerations.remove(event.address);
 
     emit(
       currentState.copyWith(
-        deviceData: _restorePendingValues(currentState, pendingDevices),
         pendingDevices: pendingDevices,
         commandErrors: commandErrors,
       ),
@@ -287,18 +359,6 @@ class MonitoringBloc extends Bloc<MonitoringEvent, MonitoringState> {
     }
   }
 
-  RoomDeviceCollection _restorePendingValues(
-    MonitoringLoaded currentState,
-    Set<DeviceAddress> pendingDevices,
-  ) {
-    var data = currentState.confirmedDeviceData;
-    for (final address in pendingDevices) {
-      final desired = currentState.deviceData.find(address);
-      if (desired != null) data = data.set(address, desired);
-    }
-    return data;
-  }
-
   Future<void> _cancelSubscriptions() async {
     _monitoringActive = false;
     await _dataSubscription?.cancel();
@@ -314,6 +374,7 @@ class MonitoringBloc extends Bloc<MonitoringEvent, MonitoringState> {
       timer.cancel();
     }
     _pendingTimers.clear();
+    _commandGenerations.clear();
   }
 
   @override

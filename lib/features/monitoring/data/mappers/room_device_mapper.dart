@@ -14,7 +14,10 @@ RoomDeviceCollection mapRoomDeviceCollectionDtoToEntity(
     if (roomValue is! Map) continue;
 
     final roomKey = roomEntry.key.toString();
-    for (final deviceEntry in roomValue.entries) {
+    final toolsValue = roomValue['tools'];
+    if (toolsValue is! Map) continue;
+
+    for (final deviceEntry in toolsValue.entries) {
       final deviceValue = _mapDeviceValue(deviceEntry.value);
       if (deviceValue == null) continue;
       values[DeviceAddress(
@@ -29,19 +32,13 @@ RoomDeviceCollection mapRoomDeviceCollectionDtoToEntity(
 }
 
 RoomDeviceValue? _mapDeviceValue(Object? rawValue) {
-  if (rawValue is bool) {
-    return RoomDeviceValue(isOn: rawValue);
-  }
   if (rawValue is! Map) return null;
 
   final state = rawValue['state'];
   if (state is! bool) return null;
 
   if (!rawValue.containsKey('brightness')) {
-    if (rawValue.containsKey('lastUpdate') || rawValue.containsKey('source')) {
-      return RoomDeviceValue(isOn: state);
-    }
-    return null;
+    return RoomDeviceValue(isOn: state);
   }
 
   final brightness = _parseBrightness(rawValue['brightness']);

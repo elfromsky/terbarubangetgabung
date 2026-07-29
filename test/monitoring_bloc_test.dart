@@ -19,6 +19,7 @@ class FakeMonitoringRepository implements MonitoringRepository {
   final connectionController = StreamController<bool>.broadcast();
   int monitoringListeners = 0;
   bool failControl = false;
+  Completer<void>? controlCompleter;
   int? lastBrightness;
   bool? lastIsOn;
   String? lastRoomKey;
@@ -41,7 +42,7 @@ class FakeMonitoringRepository implements MonitoringRepository {
   Stream<RoomDeviceCollection> getRoomDevicesStream() => roomsController.stream;
 
   @override
-  Stream<bool> getConnectionStatus() => connectionController.stream;
+  Stream<bool> getConnectionStatus() => Stream.value(true);
 
   @override
   Future<void> controlRoomDevice(
@@ -56,6 +57,7 @@ class FakeMonitoringRepository implements MonitoringRepository {
     lastIsOn = isOn;
     lastBrightness = brightness;
     if (failControl) throw Exception('write failed');
+    await controlCompleter?.future;
   }
 
   Future<void> close() async {
@@ -67,6 +69,8 @@ class FakeMonitoringRepository implements MonitoringRepository {
 
 const terasLampu = DeviceAddress(roomKey: 'teras', deviceKey: 'lampu');
 const terasSanyo = DeviceAddress(roomKey: 'teras', deviceKey: 'sanyo');
+const kamar1Lampu = DeviceAddress(roomKey: 'kamar_1', deviceKey: 'lampu');
+const kamar2Lampu = DeviceAddress(roomKey: 'kamar_2', deviceKey: 'lampu');
 
 RoomDeviceCollection roomState({required bool lampu, bool? sanyo}) {
   var collection = RoomDeviceCollection.empty().set(
@@ -129,8 +133,7 @@ void main() {
     await waitForState(
       bloc,
       (state) =>
-          state is MonitoringLoaded &&
-          state.confirmedDeviceData.values.isNotEmpty,
+          state is MonitoringLoaded && state.deviceData.values.isNotEmpty,
     );
 
     bloc.add(
@@ -163,7 +166,165 @@ void main() {
   });
 
   test(
-    'optimistic brightness and command payload use int clamp normalization',
+    'offline command is rejected without pending or repository write',
+    () async {
+      bloc.add(DeviceStateUpdated(roomState(lampu: false)));
+      await waitForState(
+        bloc,
+        (state) => state is MonitoringLoaded && !state.isConnected,
+      );
+
+      bloc.add(
+        ControlRoomDevice(
+          roomName: 'Teras',
+          roomKey: 'teras',
+          deviceName: 'Lampu',
+          deviceKey: 'lampu',
+          isOn: true,
+          brightness: 100,
+          supportsBrightness: false,
+        ),
+      );
+      await waitForState(
+        bloc,
+        (state) =>
+            state is MonitoringLoaded &&
+            state.commandErrors.containsKey(terasLampu),
+      );
+
+      final state = bloc.state as MonitoringLoaded;
+      expect(state.pendingDevices, isEmpty);
+      expect(repository.lastRoomKey, isNull);
+    },
+  );
+
+  test('no-op command refreshes persistent desired without pending', () async {
+    bloc.add(StartMonitoring());
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+    repository.roomsController.add(roomState(lampu: false));
+    await waitForState(
+      bloc,
+      (state) =>
+          state is MonitoringLoaded &&
+          state.deviceData.find(terasLampu) != null,
+    );
+
+    bloc.add(
+      ControlRoomDevice(
+        roomName: 'Teras',
+        roomKey: 'teras',
+        deviceName: 'Lampu',
+        deviceKey: 'lampu',
+        isOn: false,
+        brightness: 0,
+        supportsBrightness: false,
+      ),
+    );
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+
+    final state = bloc.state as MonitoringLoaded;
+    expect(state.pendingDevices, isEmpty);
+    expect(repository.lastRoomKey, 'teras');
+    expect(repository.lastIsOn, isFalse);
+  });
+
+  test('actual no-op overwrites conflicting persistent desired', () async {
+    bloc.add(StartMonitoring());
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+    repository.roomsController.add(roomState(lampu: false));
+    await waitForState(
+      bloc,
+      (state) =>
+          state is MonitoringLoaded &&
+          state.deviceData.find(terasLampu) != null,
+    );
+
+    bloc.add(
+      ControlRoomDevice(
+        roomName: 'Teras',
+        roomKey: 'teras',
+        deviceName: 'Lampu',
+        deviceKey: 'lampu',
+        isOn: true,
+        brightness: 100,
+        supportsBrightness: false,
+      ),
+    );
+    await waitForState(
+      bloc,
+      (state) =>
+          state is MonitoringLoaded &&
+          state.pendingDevices.contains(terasLampu),
+    );
+    bloc.add(ClearPendingCommand(terasLampu));
+    await waitForState(
+      bloc,
+      (state) => state is MonitoringLoaded && state.pendingDevices.isEmpty,
+    );
+
+    repository.lastRoomKey = null;
+    bloc.add(
+      ControlRoomDevice(
+        roomName: 'Teras',
+        roomKey: 'teras',
+        deviceName: 'Lampu',
+        deviceKey: 'lampu',
+        isOn: false,
+        brightness: 0,
+        supportsBrightness: false,
+      ),
+    );
+    await waitForState(bloc, (_) => repository.lastRoomKey == 'teras');
+
+    expect(repository.lastIsOn, isFalse);
+  });
+
+  test('shared brightness marks both bedroom lamps pending', () async {
+    bloc.add(StartMonitoring());
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+    repository.roomsController.add(
+      RoomDeviceCollection.empty()
+          .set(kamar1Lampu, const RoomDeviceValue(isOn: false, brightness: 20))
+          .set(kamar2Lampu, const RoomDeviceValue(isOn: true, brightness: 20)),
+    );
+    await waitForState(
+      bloc,
+      (state) =>
+          state is MonitoringLoaded && state.deviceData.values.length == 2,
+    );
+
+    bloc.add(
+      ControlRoomDevice(
+        roomName: 'Kamar 1',
+        roomKey: 'kamar_1',
+        deviceName: 'Lampu',
+        deviceKey: 'lampu',
+        isOn: true,
+        brightness: 60,
+        supportsBrightness: true,
+      ),
+    );
+    await waitForState(
+      bloc,
+      (state) =>
+          state is MonitoringLoaded &&
+          state.pendingDevices.contains(kamar1Lampu) &&
+          state.pendingDevices.contains(kamar2Lampu),
+    );
+
+    final state = bloc.state as MonitoringLoaded;
+    expect(
+      state.desiredDevices[kamar1Lampu],
+      const RoomDeviceValue(isOn: true, brightness: 60),
+    );
+    expect(
+      state.desiredDevices[kamar2Lampu],
+      const RoomDeviceValue(isOn: true, brightness: 60),
+    );
+  });
+
+  test(
+    'pending command does not optimistically mutate actual device data',
     () async {
       bloc.add(StartMonitoring());
       await Future<void>.delayed(const Duration(milliseconds: 20));
@@ -176,8 +337,7 @@ void main() {
       await waitForState(
         bloc,
         (state) =>
-            state is MonitoringLoaded &&
-            state.confirmedDeviceData.values.isNotEmpty,
+            state is MonitoringLoaded && state.deviceData.values.isNotEmpty,
       );
 
       bloc.add(
@@ -187,7 +347,7 @@ void main() {
           deviceName: 'Lampu',
           deviceKey: 'lampu',
           isOn: true,
-          brightness: 150.9,
+          brightness: 0,
           supportsBrightness: true,
         ),
       );
@@ -201,14 +361,64 @@ void main() {
       final state = bloc.state as MonitoringLoaded;
       expect(
         state.deviceData.find(terasLampu),
-        const RoomDeviceValue(isOn: true, brightness: 100),
+        const RoomDeviceValue(isOn: false, brightness: 20),
       );
-      expect(repository.lastBrightness, 100);
+      expect(
+        state.desiredDevices[terasLampu],
+        const RoomDeviceValue(isOn: true, brightness: 1),
+      );
+      expect(repository.lastBrightness, 1);
       expect(repository.lastIsOn, isTrue);
       expect(repository.lastRoomKey, 'teras');
       expect(repository.lastDeviceKey, 'lampu');
     },
   );
+
+  test('off dimmer retains normalized brightness', () async {
+    bloc.add(StartMonitoring());
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+    repository.roomsController.add(
+      RoomDeviceCollection.empty().set(
+        terasLampu,
+        const RoomDeviceValue(isOn: true, brightness: 35),
+      ),
+    );
+    await waitForState(
+      bloc,
+      (state) =>
+          state is MonitoringLoaded &&
+          state.deviceData.find(terasLampu) != null,
+    );
+
+    bloc.add(
+      ControlRoomDevice(
+        roomName: 'Teras',
+        roomKey: 'teras',
+        deviceName: 'Lampu',
+        deviceKey: 'lampu',
+        isOn: false,
+        brightness: 35,
+        supportsBrightness: true,
+      ),
+    );
+    await waitForState(
+      bloc,
+      (state) =>
+          state is MonitoringLoaded &&
+          state.pendingDevices.contains(terasLampu),
+    );
+
+    final state = bloc.state as MonitoringLoaded;
+    expect(
+      state.deviceData.find(terasLampu),
+      const RoomDeviceValue(isOn: true, brightness: 35),
+    );
+    expect(
+      state.desiredDevices[terasLampu],
+      const RoomDeviceValue(isOn: false, brightness: 35),
+    );
+    expect(repository.lastBrightness, 35);
+  });
 
   test(
     'unrelated confirmed update does not erase another pending command',
@@ -219,8 +429,7 @@ void main() {
       await waitForState(
         bloc,
         (state) =>
-            state is MonitoringLoaded &&
-            state.confirmedDeviceData.values.length == 2,
+            state is MonitoringLoaded && state.deviceData.values.length == 2,
       );
 
       bloc.add(
@@ -266,9 +475,13 @@ void main() {
       final state = bloc.state as MonitoringLoaded;
       expect(state.pendingDevices, contains(terasLampu));
       expect(state.pendingDevices, isNot(contains(terasSanyo)));
-      expect(state.deviceData.find(terasLampu)?.isOn, isTrue);
+      expect(state.deviceData.find(terasLampu)?.isOn, isFalse);
       expect(state.deviceData.find(terasSanyo)?.isOn, isTrue);
-      expect(state.confirmedDeviceData.find(terasSanyo)?.isOn, isTrue);
+      expect(
+        state.desiredDevices,
+        containsPair(terasLampu, const RoomDeviceValue(isOn: true)),
+      );
+      expect(state.desiredDevices, isNot(contains(terasSanyo)));
     },
   );
 
@@ -280,8 +493,7 @@ void main() {
     await waitForState(
       bloc,
       (state) =>
-          state is MonitoringLoaded &&
-          state.confirmedDeviceData.values.isNotEmpty,
+          state is MonitoringLoaded && state.deviceData.values.isNotEmpty,
     );
 
     bloc.add(
@@ -305,7 +517,6 @@ void main() {
     final state = bloc.state as MonitoringLoaded;
     expect(state.pendingDevices, isEmpty);
     expect(state.deviceData.find(terasLampu)?.isOn, isFalse);
-    expect(state.confirmedDeviceData.find(terasLampu)?.isOn, isFalse);
     expect(state.commandErrors[terasLampu], 'Perintah gagal dikirim');
   });
 
@@ -319,7 +530,7 @@ void main() {
         bloc,
         (state) =>
             state is MonitoringLoaded &&
-            state.confirmedDeviceData.find(terasLampu) != null,
+            state.deviceData.find(terasLampu) != null,
       );
 
       bloc.add(
@@ -351,11 +562,95 @@ void main() {
       final state = bloc.state as MonitoringLoaded;
       expect(state.pendingDevices, isEmpty);
       expect(state.deviceData.find(terasLampu)?.isOn, isFalse);
-      expect(state.confirmedDeviceData.find(terasLampu)?.isOn, isFalse);
       expect(
         state.commandErrors[terasLampu],
         'Perintah tidak dikonfirmasi perangkat',
       );
+      expect(
+        state.desiredDevices[terasLampu],
+        const RoomDeviceValue(isOn: true),
+      );
     },
   );
+
+  test('timeout starts before a hanging write completes', () async {
+    repository.controlCompleter = Completer<void>();
+    bloc.add(StartMonitoring());
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+    repository.roomsController.add(roomState(lampu: false));
+    await waitForState(
+      bloc,
+      (state) =>
+          state is MonitoringLoaded &&
+          state.deviceData.find(terasLampu) != null,
+    );
+
+    bloc.add(
+      ControlRoomDevice(
+        roomName: 'Teras',
+        roomKey: 'teras',
+        deviceName: 'Lampu',
+        deviceKey: 'lampu',
+        isOn: true,
+        brightness: 100,
+        supportsBrightness: false,
+      ),
+    );
+
+    await waitForState(
+      bloc,
+      (state) =>
+          state is MonitoringLoaded &&
+          state.commandErrors[terasLampu] ==
+              'Perintah tidak dikonfirmasi perangkat',
+      timeout: const Duration(seconds: 7),
+    );
+
+    final state = bloc.state as MonitoringLoaded;
+    expect(state.pendingDevices, isEmpty);
+    expect(state.deviceData.find(terasLampu)?.isOn, isFalse);
+    repository.controlCompleter!.complete();
+  });
+
+  test('late matching room update clears timeout error', () async {
+    bloc.add(StartMonitoring());
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+    repository.roomsController.add(roomState(lampu: false));
+    await waitForState(
+      bloc,
+      (state) =>
+          state is MonitoringLoaded &&
+          state.deviceData.find(terasLampu) != null,
+    );
+    bloc.add(
+      ControlRoomDevice(
+        roomName: 'Teras',
+        roomKey: 'teras',
+        deviceName: 'Lampu',
+        deviceKey: 'lampu',
+        isOn: true,
+        brightness: 100,
+        supportsBrightness: false,
+      ),
+    );
+    await waitForState(
+      bloc,
+      (state) =>
+          state is MonitoringLoaded &&
+          state.commandErrors.containsKey(terasLampu),
+      timeout: const Duration(seconds: 7),
+    );
+
+    repository.roomsController.add(roomState(lampu: true));
+    await waitForState(
+      bloc,
+      (state) =>
+          state is MonitoringLoaded &&
+          !state.commandErrors.containsKey(terasLampu),
+    );
+
+    final state = bloc.state as MonitoringLoaded;
+    expect(state.deviceData.find(terasLampu)?.isOn, isTrue);
+    expect(state.desiredDevices, isNot(contains(terasLampu)));
+  });
 }

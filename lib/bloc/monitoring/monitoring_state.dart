@@ -18,7 +18,7 @@ class MonitoringLoaded extends MonitoringState {
   final McbDataCollection mcbData;
   final bool isConnected;
   final RoomDeviceCollection deviceData;
-  final RoomDeviceCollection confirmedDeviceData;
+  final Map<DeviceAddress, RoomDeviceValue> desiredDevices;
   final Set<DeviceAddress> pendingDevices;
   final Map<DeviceAddress, String> commandErrors;
 
@@ -26,12 +26,13 @@ class MonitoringLoaded extends MonitoringState {
     required this.mcbData,
     required this.isConnected,
     RoomDeviceCollection? deviceData,
-    RoomDeviceCollection? confirmedDeviceData,
+    Map<DeviceAddress, RoomDeviceValue>? desiredDevices,
     Set<DeviceAddress>? pendingDevices,
     Map<DeviceAddress, String>? commandErrors,
   }) : deviceData = deviceData ?? RoomDeviceCollection.empty(),
-       confirmedDeviceData =
-           confirmedDeviceData ?? RoomDeviceCollection.empty(),
+       desiredDevices = Map<DeviceAddress, RoomDeviceValue>.unmodifiable(
+         desiredDevices ?? const {},
+       ),
        pendingDevices = Set<DeviceAddress>.unmodifiable(
          pendingDevices ?? const {},
        ),
@@ -43,7 +44,7 @@ class MonitoringLoaded extends MonitoringState {
     McbDataCollection? mcbData,
     bool? isConnected,
     RoomDeviceCollection? deviceData,
-    RoomDeviceCollection? confirmedDeviceData,
+    Map<DeviceAddress, RoomDeviceValue>? desiredDevices,
     Set<DeviceAddress>? pendingDevices,
     Map<DeviceAddress, String>? commandErrors,
   }) {
@@ -51,7 +52,7 @@ class MonitoringLoaded extends MonitoringState {
       mcbData: mcbData ?? this.mcbData,
       isConnected: isConnected ?? this.isConnected,
       deviceData: deviceData ?? this.deviceData,
-      confirmedDeviceData: confirmedDeviceData ?? this.confirmedDeviceData,
+      desiredDevices: desiredDevices ?? this.desiredDevices,
       pendingDevices: pendingDevices ?? this.pendingDevices,
       commandErrors: commandErrors ?? this.commandErrors,
     );

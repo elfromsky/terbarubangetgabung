@@ -58,6 +58,26 @@ void main() {
     expect(dapur.devices.first.supportsBrightness, isTrue);
   });
 
+  test('Kamar 1 exposes Lampu before Stop Kontak', () {
+    final kamar1 = findRoomConfig('kamar_1');
+
+    expect(kamar1, isNotNull);
+    expect(
+      kamar1!.devices.map((device) => device.displayName),
+      orderedEquals(['Lampu', 'Stop Kontak']),
+    );
+  });
+
+  test('Kamar 2 exposes Lampu before Stop Kontak', () {
+    final kamar2 = findRoomConfig('kamar_2');
+
+    expect(kamar2, isNotNull);
+    expect(
+      kamar2!.devices.map((device) => device.displayName),
+      orderedEquals(['Lampu', 'Stop Kontak']),
+    );
+  });
+
   test('control event keeps display labels separate from canonical keys', () {
     final event = ControlRoomDevice(
       roomName: 'Teras Depan',

@@ -20,6 +20,8 @@ import 'package:go_router/go_router.dart';
 
 class FakeMonitoringRepository implements MonitoringRepository {
   final roomsController = StreamController<RoomDeviceCollection>.broadcast();
+  bool? lastIsOn;
+  int? lastBrightness;
 
   @override
   Future<void> controlRoomDevice(
@@ -28,10 +30,13 @@ class FakeMonitoringRepository implements MonitoringRepository {
     bool isOn,
     int brightness,
     bool supportsBrightness,
-  ) async {}
+  ) async {
+    lastIsOn = isOn;
+    lastBrightness = brightness;
+  }
 
   @override
-  Stream<bool> getConnectionStatus() => const Stream.empty();
+  Stream<bool> getConnectionStatus() => Stream.value(true);
 
   @override
   Stream<McbDataCollection> getMonitoringDataStream() => const Stream.empty();
@@ -75,6 +80,20 @@ RoomDeviceCollection terasDevices({bool includeValues = true}) {
         const DeviceAddress(roomKey: 'teras', deviceKey: 'sanyo'),
         const RoomDeviceValue(isOn: false),
       );
+}
+
+RoomDeviceCollection dapurLampu({required bool isOn, required int brightness}) {
+  return RoomDeviceCollection.empty().set(
+    const DeviceAddress(roomKey: 'dapur', deviceKey: 'lampu'),
+    RoomDeviceValue(isOn: isOn, brightness: brightness),
+  );
+}
+
+Future<void> selectDapur(WidgetTester tester) async {
+  await tester.tap(find.text('Teras').first);
+  await tester.pumpAndSettle();
+  await tester.tap(find.text('Dapur'));
+  await tester.pumpAndSettle();
 }
 
 void main() {
@@ -229,6 +248,7 @@ void main() {
 
     await tester.pumpWidget(MaterialApp.router(routerConfig: router));
     bloc.add(DeviceStateUpdated(terasDevices()));
+    bloc.add(ConnectionStatusChanged(true));
     await tester.pump();
 
     bloc.add(
@@ -297,5 +317,71 @@ void main() {
         .toList();
     expect(buttons, hasLength(2));
     expect(buttons.every((button) => button.onPressed != null), isTrue);
+  });
+
+  testWidgets('dimmer off keeps local brightness and sends it unchanged', (
+    tester,
+  ) async {
+    final repository = FakeMonitoringRepository();
+    final bloc = createMonitoringBloc(repository);
+    final router = createControlRouter(bloc);
+    addTearDown(() async {
+      router.dispose();
+      await bloc.close();
+      await repository.close();
+    });
+
+    await tester.pumpWidget(MaterialApp.router(routerConfig: router));
+    bloc.add(DeviceStateUpdated(dapurLampu(isOn: true, brightness: 35)));
+    bloc.add(ConnectionStatusChanged(true));
+    await tester.pump();
+    await selectDapur(tester);
+
+    await tester.tap(find.widgetWithText(ElevatedButton, 'Mati'));
+    await tester.pump();
+    expect(tester.widget<Slider>(find.byType(Slider)).value, 35);
+
+    final sendButton = find.widgetWithText(ElevatedButton, 'Send');
+    await tester.ensureVisible(sendButton);
+    await tester.tap(sendButton);
+    await tester.pump();
+    expect(repository.lastIsOn, isFalse);
+    expect(repository.lastBrightness, 35);
+    bloc.add(DeviceStateUpdated(dapurLampu(isOn: false, brightness: 35)));
+    await tester.pump();
+  });
+
+  testWidgets('dimmer on from zero uses minimum brightness one', (
+    tester,
+  ) async {
+    final repository = FakeMonitoringRepository();
+    final bloc = createMonitoringBloc(repository);
+    final router = createControlRouter(bloc);
+    addTearDown(() async {
+      router.dispose();
+      await bloc.close();
+      await repository.close();
+    });
+
+    await tester.pumpWidget(MaterialApp.router(routerConfig: router));
+    bloc.add(DeviceStateUpdated(dapurLampu(isOn: false, brightness: 0)));
+    bloc.add(ConnectionStatusChanged(true));
+    await tester.pump();
+    await selectDapur(tester);
+
+    await tester.tap(find.widgetWithText(ElevatedButton, 'Nyala'));
+    await tester.pump();
+    final slider = tester.widget<Slider>(find.byType(Slider));
+    expect(slider.min, 1);
+    expect(slider.value, 1);
+
+    final sendButton = find.widgetWithText(ElevatedButton, 'Send');
+    await tester.ensureVisible(sendButton);
+    await tester.tap(sendButton);
+    await tester.pump();
+    expect(repository.lastIsOn, isTrue);
+    expect(repository.lastBrightness, 1);
+    bloc.add(DeviceStateUpdated(dapurLampu(isOn: true, brightness: 1)));
+    await tester.pump();
   });
 }

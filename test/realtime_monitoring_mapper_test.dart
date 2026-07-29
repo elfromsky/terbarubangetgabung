@@ -29,6 +29,18 @@ void main() {
     expect(result.sensorData.connected, isFalse);
   });
 
+  test('disconnected environment maps backend sentinel values to zero', () {
+    final dto = mapRealtimeMonitoringDataToDto({
+      'environment': {'temperature': -1, 'humidity': -1, 'connected': false},
+      'power': {},
+    });
+    final result = mapRealtimeMonitoringDtoToEntity(dto);
+
+    expect(result.sensorData.temperature, 0);
+    expect(result.sensorData.humidity, 0);
+    expect(result.sensorData.connected, isFalse);
+  });
+
   test('legacy sensor mapper accepts aliases', () {
     final dto = mapRealtimeSensorDataToDto({
       'suhu': '26.5',
