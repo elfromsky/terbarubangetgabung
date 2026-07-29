@@ -10,5 +10,9 @@ RealtimeDatabase &firebaseDatabase();
 AsyncClientClass &firebaseDataClient();
 AsyncClientClass &firebaseStreamClient();
 void firebaseSubscribeToCommandStream();
+void firebaseMaintainCommandStream();
+void firebaseMarkCommandStreamActive();
+void firebaseMarkCommandStreamInactive();
+bool firebaseIsCurrentCommandStreamUid(const String &uid);
 
 #endif

@@ -3,6 +3,7 @@
 #include <WiFi.h>
 
 const uint8_t SLAVE_MAC_ADDRESS[6] = {0x68, 0xB6, 0xB3, 0x2E, 0x42, 0x4C};
+static const uint8_t ESPNOW_BROADCAST_MAC[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 
 portMUX_TYPE espNowMux = portMUX_INITIALIZER_UNLOCKED;
 
@@ -17,9 +18,27 @@ static volatile uint8_t receiveQueueCount = 0;
 
 static bool espNowInitialized = false;
 static bool peerRegistered = false;
+static bool broadcastPeerRegistered = false;
+static uint8_t peerChannel = 0;
+static uint8_t broadcastPeerChannel = 0;
+
+static bool recoverESPNowInit()
+{
+    espNowInitialized = false;
+    peerRegistered = false;
+    broadcastPeerRegistered = false;
+    peerChannel = 0;
+    broadcastPeerChannel = 0;
+    return initESPNow();
+}
 
 void onDataSent(const uint8_t *mac_addr, esp_now_send_status_t status)
 {
+    if (mac_addr == nullptr || memcmp(mac_addr, SLAVE_MAC_ADDRESS, 6) != 0)
+    {
+        return;
+    }
+
     portENTER_CRITICAL(&espNowMux);
     lastSendSuccess = (status == ESP_NOW_SEND_SUCCESS);
     sendCallbackReceived = true;
@@ -98,6 +117,17 @@ String generateRequestId()
 
 bool initESPNow()
 {
+    if (espNowInitialized)
+    {
+        return true;
+    }
+
+    if (WiFi.status() != WL_CONNECTED || getCurrentEspNowChannel() == 0)
+    {
+        Serial.println("ESP-NOW init skipped: WiFi router not connected");
+        return false;
+    }
+
     if (esp_now_init() != ESP_OK)
     {
         Serial.println("ESP-NOW init failed");
@@ -106,8 +136,14 @@ bool initESPNow()
     esp_now_register_send_cb(onDataSent);
     esp_now_register_recv_cb(onDataRecv);
     espNowInitialized = true;
-    Serial.println("ESP-NOW initialized");
+    Serial.print("ESP-NOW initialized on router channel: ");
+    Serial.println(getCurrentEspNowChannel());
     return true;
+}
+
+uint8_t getCurrentEspNowChannel()
+{
+    return WiFi.channel();
 }
 
 bool registerSlavePeer()
@@ -116,31 +152,123 @@ bool registerSlavePeer()
     {
         return false;
     }
+
+    const uint8_t channel = getCurrentEspNowChannel();
+    if (channel == 0)
+    {
+        return false;
+    }
+
+    if (peerRegistered && peerChannel == channel && esp_now_is_peer_exist(SLAVE_MAC_ADDRESS))
+    {
+        return true;
+    }
+
+    peerRegistered = false;
+    peerChannel = 0;
+    if (esp_now_is_peer_exist(SLAVE_MAC_ADDRESS))
+    {
+        esp_now_del_peer(SLAVE_MAC_ADDRESS);
+    }
+
     esp_now_peer_info_t peerInfo = {};
     memcpy(peerInfo.peer_addr, SLAVE_MAC_ADDRESS, 6);
-    peerInfo.channel = 0;
+    peerInfo.channel = channel;
     peerInfo.ifidx = WIFI_IF_STA;
     peerInfo.encrypt = false;
-    if (esp_now_add_peer(&peerInfo) != ESP_OK)
+    esp_err_t result = esp_now_add_peer(&peerInfo);
+    if (result == ESP_ERR_ESPNOW_NOT_INIT && recoverESPNowInit())
+    {
+        result = esp_now_add_peer(&peerInfo);
+    }
+    if (result != ESP_OK)
     {
         Serial.println("ESP-NOW add peer failed");
         return false;
     }
     peerRegistered = true;
+    peerChannel = channel;
     Serial.println("ESP-NOW slave peer registered");
     return true;
 }
 
+bool registerBroadcastPeer()
+{
+    if (!espNowInitialized)
+    {
+        return false;
+    }
+
+    const uint8_t channel = getCurrentEspNowChannel();
+    if (channel == 0)
+    {
+        return false;
+    }
+
+    if (broadcastPeerRegistered && broadcastPeerChannel == channel && esp_now_is_peer_exist(ESPNOW_BROADCAST_MAC))
+    {
+        return true;
+    }
+
+    broadcastPeerRegistered = false;
+    broadcastPeerChannel = 0;
+    if (esp_now_is_peer_exist(ESPNOW_BROADCAST_MAC))
+    {
+        esp_now_del_peer(ESPNOW_BROADCAST_MAC);
+    }
+
+    esp_now_peer_info_t peerInfo = {};
+    memcpy(peerInfo.peer_addr, ESPNOW_BROADCAST_MAC, 6);
+    peerInfo.channel = channel;
+    peerInfo.ifidx = WIFI_IF_STA;
+    peerInfo.encrypt = false;
+    esp_err_t result = esp_now_add_peer(&peerInfo);
+    if (result == ESP_ERR_ESPNOW_NOT_INIT && recoverESPNowInit())
+    {
+        result = esp_now_add_peer(&peerInfo);
+    }
+    if (result != ESP_OK)
+    {
+        Serial.println("ESP-NOW broadcast peer add failed");
+        return false;
+    }
+
+    broadcastPeerRegistered = true;
+    broadcastPeerChannel = channel;
+    Serial.println("ESP-NOW broadcast peer registered");
+    return true;
+}
+
+bool sendDiscoveryBeacon()
+{
+    if ((!espNowInitialized && !initESPNow()) || !registerBroadcastPeer())
+    {
+        return false;
+    }
+
+    DiscoveryBeaconPayload beacon = {};
+    beacon.type = ESPNOW_MSG_DISCOVERY_BEACON;
+    beacon.channel = getCurrentEspNowChannel();
+    beacon.magic = ESPNOW_DISCOVERY_MAGIC;
+    beacon.crc = computeXorCRC(reinterpret_cast<const uint8_t *>(&beacon), sizeof(beacon) - 1);
+
+    return esp_now_send(ESPNOW_BROADCAST_MAC,
+                        reinterpret_cast<const uint8_t *>(&beacon),
+                        sizeof(beacon)) == ESP_OK;
+}
+
 bool sendCommandToSlave(const DeviceCommandPayload &cmd)
 {
-    if (!espNowInitialized || !peerRegistered)
+    if ((!espNowInitialized && !initESPNow()) || !registerSlavePeer())
     {
         Serial.println("Failed send command Slave. ESP-NOW not initialized or peer not registered");
         return false;
     }
 
+    portENTER_CRITICAL(&espNowMux);
     sendCallbackReceived = false;
     lastSendSuccess = false;
+    portEXIT_CRITICAL(&espNowMux);
     esp_err_t result = esp_now_send(SLAVE_MAC_ADDRESS, (uint8_t *)&cmd, sizeof(DeviceCommandPayload));
     if (result != ESP_OK)
     {

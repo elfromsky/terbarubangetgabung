@@ -7,297 +7,746 @@
 
 namespace
 {
-    struct ParsedRoomCommand
-    {
-        bool valid = false;
-        bool isOn = false;
-        int brightness = 0;
-    };
+struct ParsedCommand
+{
+    bool valid;
+    bool state;
+    uint8_t brightness;
+};
 
-    struct PendingCommand
-    {
-        bool active = false;
-        char requestId[32];
-        char firebasePath[128];
-        char roomKey[24];
-        char deviceKey[32];
-        uint8_t state;
-        uint8_t brightness;
-        unsigned long sentMs;
-    };
+struct DeviceRoute
+{
+    const char *roomKey;
+    const char *deviceKey;
+    DeviceOwner owner;
+    bool dimmable;
+    bool desiredKnown;
+    bool desiredState;
+    uint8_t desiredBrightness;
+    bool actualKnown;
+    bool actualState;
+    uint8_t actualBrightness;
+    bool dirty;
+    bool publishPending;
+    unsigned long nextRetryMs;
+    unsigned long nextPublishMs;
+};
 
-    PendingCommand pendingCmd;
-    const unsigned long ESP_NOW_TIMEOUT_MS = 3000;
+DeviceRoute routes[] = {
+    {"teras", "lampu", DeviceOwner::Master, false, false, false, 0, false, false, 0, false, false, 0, 0},
+    {"teras", "sanyo", DeviceOwner::Master, false, false, false, 0, false, false, 0, false, false, 0, 0},
+    {"lorong", "blower", DeviceOwner::Slave, false, false, false, 0, false, false, 0, false, false, 0, 0},
+    {"lorong", "stop_kontak", DeviceOwner::Slave, false, false, false, 0, false, false, 0, false, false, 0, 0},
+    {"kamar_1", "stop_kontak", DeviceOwner::Slave, false, false, false, 0, false, false, 0, false, false, 0, 0},
+    {"kamar_2", "stop_kontak", DeviceOwner::Slave, false, false, false, 0, false, false, 0, false, false, 0, 0},
+    {"dapur", "blower", DeviceOwner::Slave, false, false, false, 0, false, false, 0, false, false, 0, 0},
+    {"kamar_1", "lampu", DeviceOwner::Slave, true, false, false, 0, false, false, 0, false, false, 0, 0},
+    {"kamar_2", "lampu", DeviceOwner::Slave, true, false, false, 0, false, false, 0, false, false, 0, 0},
+    {"dapur", "lampu", DeviceOwner::Slave, true, false, false, 0, false, false, 0, false, false, 0, 0},
+};
 
-    bool isStateOnlyDevice(const String &roomKey, const String &deviceKey)
+constexpr size_t ROUTE_COUNT = sizeof(routes) / sizeof(routes[0]);
+static_assert(ROUTE_COUNT == 10, "Device route table must contain 10 routes");
+constexpr uint8_t MAX_SEND_ATTEMPTS = 3;
+constexpr unsigned long SEND_RETRY_DELAY_MS = 300;
+constexpr unsigned long ACK_TIMEOUT_MS = 3000;
+constexpr unsigned long CYCLE_BACKOFF_MS = 2000;
+constexpr unsigned long PUBLISH_RETRY_MS = 2000;
+
+struct PendingCommand
+{
+    bool active;
+    DeviceCommandPayload payload;
+    size_t routeIndex;
+    uint8_t attempts;
+    unsigned long sentMs;
+    unsigned long nextAttemptMs;
+    bool waitingForAck;
+};
+
+PendingCommand pendingCmd = {};
+size_t nextSlaveRoute = 0;
+size_t nextPublishRoute = 0;
+
+bool deadlineReached(unsigned long now, unsigned long deadline)
+{
+    return static_cast<long>(now - deadline) >= 0;
+}
+
+int findRoute(const String &roomKey, const String &deviceKey)
+{
+    for (size_t i = 0; i < ROUTE_COUNT; i++)
     {
-        if (roomKey == "teras")
+        if (roomKey == routes[i].roomKey && deviceKey == routes[i].deviceKey)
         {
-            return deviceKey == "lampu" || deviceKey == "sanyo";
+            return static_cast<int>(i);
         }
-        if (roomKey == "lorong")
+    }
+    return -1;
+}
+
+int findSlaveRoute(const char *roomKey, const char *deviceKey)
+{
+    for (size_t i = 0; i < ROUTE_COUNT; i++)
+    {
+        if (routes[i].owner == DeviceOwner::Slave &&
+            strcmp(roomKey, routes[i].roomKey) == 0 &&
+            strcmp(deviceKey, routes[i].deviceKey) == 0)
         {
-            return deviceKey == "blower" || deviceKey == "stop_kontak";
+            return static_cast<int>(i);
         }
-        if (roomKey == "kamar_1" || roomKey == "kamar_2")
-        {
-            return deviceKey == "stop_kontak";
-        }
-        if (roomKey == "dapur")
-        {
-            return deviceKey == "blower";
-        }
+    }
+    return -1;
+}
+
+bool actualMatchesDesired(const DeviceRoute &route)
+{
+    if (!route.desiredKnown || !route.actualKnown || route.desiredState != route.actualState)
+    {
         return false;
     }
+    return !route.dimmable ||
+           (!route.desiredState && route.desiredBrightness == 0) ||
+           route.desiredBrightness == route.actualBrightness;
+}
 
-    bool isDimmableDevice(const String &roomKey, const String &deviceKey)
+void refreshDirty(DeviceRoute &route)
+{
+    route.dirty = route.desiredKnown && !actualMatchesDesired(route);
+}
+
+ParsedCommand parseCommand(const DeviceRoute &route, JsonVariantConst value)
+{
+    ParsedCommand command = {false, false, 0};
+    if (!value.is<JsonObjectConst>())
     {
-        if (roomKey == "kamar_1" || roomKey == "kamar_2")
-        {
-            return deviceKey == "lampu";
-        }
-        if (roomKey == "dapur")
-        {
-            return deviceKey == "lampu";
-        }
-        return false;
-    }
-
-    bool isKnownDevice(const String &roomKey, const String &deviceKey)
-    {
-        return isStateOnlyDevice(roomKey, deviceKey) || isDimmableDevice(roomKey, deviceKey);
-    }
-
-    bool parseStateText(String stateText, bool &isOn)
-    {
-        stateText.trim();
-        stateText.toUpperCase();
-        if (stateText == "ON" || stateText == "TRUE" || stateText == "1")
-        {
-            isOn = true;
-            return true;
-        }
-        if (stateText == "OFF" || stateText == "FALSE" || stateText == "0")
-        {
-            isOn = false;
-            return true;
-        }
-        return false;
-    }
-
-    bool parseStateValue(JsonVariant value, bool &isOn)
-    {
-        if (value.is<bool>())
-        {
-            isOn = value.as<bool>();
-            return true;
-        }
-
-        if (value.is<int>())
-        {
-            int stateValue = value.as<int>();
-            if (stateValue == 0 || stateValue == 1)
-            {
-                isOn = stateValue == 1;
-                return true;
-            }
-            return false;
-        }
-
-        if (value.is<const char *>())
-        {
-            return parseStateText(value.as<String>(), isOn);
-        }
-
-        return false;
-    }
-
-    void removeCommand(const String &path)
-    {
-        firebaseDatabase().remove(firebaseDataClient(), path);
-    }
-
-    void setDeviceRoomState(const String &roomKey, const String &deviceKey, bool isOn, int brightness)
-    {
-        if (brightness < 0)
-        {
-            brightness = 0;
-        }
-        if (brightness > 100)
-        {
-            brightness = 100;
-        }
-
-        String path = "/rooms/" + roomKey + "/" + deviceKey;
-        if (isStateOnlyDevice(roomKey, deviceKey))
-        {
-            firebaseDatabase().set<bool>(firebaseDataClient(), path, isOn);
-            return;
-        }
-
-        if (isDimmableDevice(roomKey, deviceKey))
-        {
-            if (!isOn)
-            {
-                brightness = 0;
-            }
-            char buf[128];
-            snprintf(buf, sizeof(buf), "{\"state\":%s,\"brightness\":%d}", isOn ? "true" : "false", brightness);
-            firebaseDatabase().set<object_t>(firebaseDataClient(), path, object_t(buf));
-            return;
-        }
-
-        Serial.println("Room state write ignored: unknown device");
-    }
-
-    void setDeviceRoomState(const String &roomKey, const String &deviceKey, bool isOn)
-    {
-        setDeviceRoomState(roomKey, deviceKey, isOn, isOn ? 100 : 0);
-    }
-
-    ParsedRoomCommand parseRoomCommand(const String &roomKey, const String &deviceKey, const String &payload)
-    {
-        ParsedRoomCommand command;
-        JsonDocument doc;
-        DeserializationError error = deserializeJson(doc, payload);
-        if (error)
-        {
-            if (isStateOnlyDevice(roomKey, deviceKey))
-            {
-                bool isOn = false;
-                if (parseStateText(payload, isOn))
-                {
-                    command.isOn = isOn;
-                    command.brightness = command.isOn ? 100 : 0;
-                    command.valid = true;
-                    return command;
-                }
-            }
-            Serial.print("Command JSON parse error: ");
-            Serial.println(error.c_str());
-            return command;
-        }
-
-        if (isStateOnlyDevice(roomKey, deviceKey))
-        {
-            JsonVariant stateValue = doc.as<JsonVariant>();
-            if (doc.is<JsonObject>())
-            {
-                stateValue = doc["state"];
-            }
-
-            bool isOn = false;
-            if (!parseStateValue(stateValue, isOn))
-            {
-                Serial.println("Invalid state-only command: expected bool, ON/OFF, or object state");
-                return command;
-            }
-
-            command.isOn = isOn;
-            command.brightness = command.isOn ? 100 : 0;
-            command.valid = true;
-            return command;
-        }
-
-        if (isDimmableDevice(roomKey, deviceKey))
-        {
-            if (!doc.is<JsonObject>())
-            {
-                Serial.println("Invalid dimmable command: expected object");
-                return command;
-            }
-
-            JsonVariant state = doc["state"];
-            JsonVariant brightness = doc["brightness"];
-            bool isOn = false;
-            if (!parseStateValue(state, isOn) || !brightness.is<int>())
-            {
-                Serial.println("Invalid dimmable command fields");
-                return command;
-            }
-
-            int brightnessValue = brightness.as<int>();
-            if (brightnessValue < 0 || brightnessValue > 100)
-            {
-                Serial.println("Invalid brightness value in command");
-                return command;
-            }
-
-            command.isOn = isOn;
-            command.brightness = command.isOn ? brightnessValue : 0;
-            command.valid = true;
-        }
-
+        Serial.println("Invalid command: expected object payload");
         return command;
     }
 
-    void forwardToSlave(const String &roomKey, const String &deviceKey, bool isOn, int brightness, const String &fullPath)
+    JsonObjectConst object = value.as<JsonObjectConst>();
+    JsonVariantConst state = object["state"];
+    if (!state.is<bool>())
     {
-        if (pendingCmd.active)
-        {
-            Serial.println("Slave command dropped: pending command in flight");
-            removeCommand(fullPath);
-            return;
-        }
-
-        DeviceCommandPayload cmd = {};
-        cmd.type = CMD_TYPE_COMMAND;
-        strncpy(cmd.roomKey, roomKey.c_str(), sizeof(cmd.roomKey) - 1);
-        strncpy(cmd.deviceKey, deviceKey.c_str(), sizeof(cmd.deviceKey) - 1);
-        cmd.state = isOn ? 1 : 0;
-        cmd.brightness = (uint8_t)brightness;
-        String requestId = generateRequestId();
-        strncpy(cmd.requestId, requestId.c_str(), sizeof(cmd.requestId) - 1);
-        cmd.crc = computeXorCRC((uint8_t *)&cmd, sizeof(cmd) - 1);
-
-        if (!sendCommandToSlave(cmd))
-        {
-            Serial.println("Failed to queue slave command via ESP-NOW");
-            removeCommand(fullPath);
-            return;
-        }
-
-        pendingCmd.active = true;
-        strncpy(pendingCmd.requestId, requestId.c_str(), sizeof(pendingCmd.requestId) - 1);
-        pendingCmd.requestId[sizeof(pendingCmd.requestId) - 1] = '\0';
-        strncpy(pendingCmd.firebasePath, fullPath.c_str(), sizeof(pendingCmd.firebasePath) - 1);
-        pendingCmd.firebasePath[sizeof(pendingCmd.firebasePath) - 1] = '\0';
-        strncpy(pendingCmd.roomKey, roomKey.c_str(), sizeof(pendingCmd.roomKey) - 1);
-        pendingCmd.roomKey[sizeof(pendingCmd.roomKey) - 1] = '\0';
-        strncpy(pendingCmd.deviceKey, deviceKey.c_str(), sizeof(pendingCmd.deviceKey) - 1);
-        pendingCmd.deviceKey[sizeof(pendingCmd.deviceKey) - 1] = '\0';
-        pendingCmd.state = cmd.state;
-        pendingCmd.brightness = cmd.brightness;
-        pendingCmd.sentMs = millis();
-
-        Serial.print("Forwarded to slave: ");
-        Serial.print(roomKey);
-        Serial.print("/");
-        Serial.print(deviceKey);
-        Serial.print(" state=");
-        Serial.print(isOn ? "ON" : "OFF");
-        Serial.print(" brightness=");
-        Serial.print(brightness);
-        Serial.print(" rid=");
-        Serial.println(requestId);
+        Serial.println("Invalid command: state must be bool");
+        return command;
     }
+
+    if (!route.dimmable)
+    {
+        if (object.size() != 1)
+        {
+            Serial.println("Invalid relay command: expected only state");
+            return command;
+        }
+        command.valid = true;
+        command.state = state.as<bool>();
+        return command;
+    }
+
+    JsonVariantConst brightness = object["brightness"];
+    if (object.size() != 2 || !brightness.is<int>())
+    {
+        Serial.println("Invalid dimmer command: expected state bool and brightness integer");
+        return command;
+    }
+
+    int brightnessValue = brightness.as<int>();
+    if (brightnessValue < 0 || brightnessValue > 100)
+    {
+        Serial.println("Invalid dimmer command: brightness must be 0..100");
+        return command;
+    }
+
+    command.valid = true;
+    command.state = state.as<bool>();
+    command.brightness = static_cast<uint8_t>(command.state && brightnessValue == 0 ? 1 : brightnessValue);
+    return command;
+}
+
+void acceptDesired(size_t routeIndex, JsonVariantConst value)
+{
+    if (value.isNull())
+    {
+        return;
+    }
+
+    DeviceRoute &route = routes[routeIndex];
+    ParsedCommand command = parseCommand(route, value);
+    if (!command.valid)
+    {
+        Serial.print("Command ignored for ");
+        Serial.print(route.roomKey);
+        Serial.print("/");
+        Serial.println(route.deviceKey);
+        return;
+    }
+
+    route.desiredKnown = true;
+    route.desiredState = command.state;
+    route.desiredBrightness = command.brightness;
+    refreshDirty(route);
+    route.nextRetryMs = millis();
+
+    if (pendingCmd.active && pendingCmd.routeIndex == routeIndex)
+    {
+        bool payloadIsCurrent = pendingCmd.payload.state == (route.desiredState ? 1 : 0) &&
+                                pendingCmd.payload.brightness ==
+                                    (route.dimmable ? route.desiredBrightness : (route.desiredState ? 100 : 0));
+        if (!payloadIsCurrent && !pendingCmd.waitingForAck)
+        {
+            pendingCmd.active = false;
+        }
+    }
+
+    Serial.print("Desired state updated: ");
+    Serial.print(route.roomKey);
+    Serial.print("/");
+    Serial.print(route.deviceKey);
+    Serial.print(" state=");
+    Serial.print(route.desiredState ? "ON" : "OFF");
+    if (route.dimmable)
+    {
+        Serial.print(" brightness=");
+        Serial.print(route.desiredBrightness);
+    }
+    Serial.println();
+}
+
+void processDevicePayload(const String &roomKey, const String &deviceKey, const String &payload)
+{
+    int routeIndex = findRoute(roomKey, deviceKey);
+    if (routeIndex < 0)
+    {
+        Serial.println("Ignoring unknown room/device command");
+        return;
+    }
+
+    JsonDocument document;
+    DeserializationError error = deserializeJson(document, payload);
+    if (error)
+    {
+        Serial.print("Command JSON parse error: ");
+        Serial.println(error.c_str());
+        return;
+    }
+    acceptDesired(static_cast<size_t>(routeIndex), document.as<JsonVariantConst>());
+}
+
+void processToolsValue(const String &roomKey, JsonVariantConst tools)
+{
+    if (tools.isNull())
+    {
+        return;
+    }
+    if (!tools.is<JsonObjectConst>())
+    {
+        Serial.println("Tools snapshot ignored: expected object");
+        return;
+    }
+
+    for (JsonPairConst pair : tools.as<JsonObjectConst>())
+    {
+        int routeIndex = findRoute(roomKey, pair.key().c_str());
+        if (routeIndex >= 0)
+        {
+            acceptDesired(static_cast<size_t>(routeIndex), pair.value());
+        }
+    }
+}
+
+void processRoomValue(const String &roomKey, JsonVariantConst room)
+{
+    if (room.isNull())
+    {
+        return;
+    }
+    if (!room.is<JsonObjectConst>())
+    {
+        Serial.println("Room snapshot ignored: expected object");
+        return;
+    }
+
+    JsonVariantConst tools = room["tools"];
+    if (!tools.isNull())
+    {
+        processToolsValue(roomKey, tools);
+    }
+}
+
+void processRoomsValue(JsonVariantConst rooms)
+{
+    if (rooms.isNull())
+    {
+        return;
+    }
+    if (!rooms.is<JsonObjectConst>())
+    {
+        Serial.println("Rooms snapshot ignored: expected object");
+        return;
+    }
+
+    for (JsonPairConst pair : rooms.as<JsonObjectConst>())
+    {
+        processRoomValue(pair.key().c_str(), pair.value());
+    }
+}
+
+bool parsePayload(const String &payload, JsonDocument &document, const char *label)
+{
+    DeserializationError error = deserializeJson(document, payload);
+    if (error)
+    {
+        Serial.print(label);
+        Serial.print(" parse error: ");
+        Serial.println(error.c_str());
+        return false;
+    }
+    return true;
+}
+
+void processCommandsSnapshot(const String &payload)
+{
+    JsonDocument document;
+    if (!parsePayload(payload, document, "Commands snapshot"))
+    {
+        return;
+    }
+
+    JsonVariantConst root = document.as<JsonVariantConst>();
+    if (!root.is<JsonObjectConst>())
+    {
+        Serial.println("Commands snapshot ignored: expected object");
+        return;
+    }
+    processRoomsValue(root["rooms"]);
+}
+
+void processRoomsPayload(const String &payload)
+{
+    JsonDocument document;
+    if (parsePayload(payload, document, "Rooms payload"))
+    {
+        processRoomsValue(document.as<JsonVariantConst>());
+    }
+}
+
+void processRoomPayload(const String &roomKey, const String &payload)
+{
+    JsonDocument document;
+    if (parsePayload(payload, document, "Room payload"))
+    {
+        processRoomValue(roomKey, document.as<JsonVariantConst>());
+    }
+}
+
+void processToolsPayload(const String &roomKey, const String &payload)
+{
+    JsonDocument document;
+    if (parsePayload(payload, document, "Tools payload"))
+    {
+        processToolsValue(roomKey, document.as<JsonVariantConst>());
+    }
+}
+
+bool processFlattenedPatch(const String &basePath, const String &payload)
+{
+    JsonDocument document;
+    if (!parsePayload(payload, document, "Patch payload") ||
+        !document.is<JsonObjectConst>())
+    {
+        return false;
+    }
+
+    bool handled = false;
+    for (JsonPairConst pair : document.as<JsonObjectConst>())
+    {
+        String relativePath = pair.key().c_str();
+        if (relativePath.indexOf('/') < 0)
+        {
+            continue;
+        }
+
+        String fullPath;
+        if (relativePath.startsWith("/commands"))
+        {
+            fullPath = relativePath;
+        }
+        else if (relativePath.startsWith("commands/"))
+        {
+            fullPath = "/" + relativePath;
+        }
+        else
+        {
+            fullPath = basePath;
+            if (fullPath.endsWith("/"))
+            {
+                fullPath.remove(fullPath.length() - 1);
+            }
+            fullPath += "/" + relativePath;
+        }
+
+        const char *prefix = "/commands/rooms/";
+        if (!fullPath.startsWith(prefix))
+        {
+            continue;
+        }
+
+        String remainder = fullPath.substring(strlen(prefix));
+        int roomSlash = remainder.indexOf('/');
+        if (roomSlash <= 0)
+        {
+            continue;
+        }
+        String roomKey = remainder.substring(0, roomSlash);
+        String devicePath = remainder.substring(roomSlash + 1);
+        const char *toolsPrefix = "tools/";
+        if (!devicePath.startsWith(toolsPrefix))
+        {
+            continue;
+        }
+        String deviceKey = devicePath.substring(strlen(toolsPrefix));
+        if (deviceKey.length() == 0 || deviceKey.indexOf('/') >= 0)
+        {
+            continue;
+        }
+
+        int routeIndex = findRoute(roomKey, deviceKey);
+        if (routeIndex >= 0)
+        {
+            acceptDesired(static_cast<size_t>(routeIndex), pair.value());
+            handled = true;
+        }
+    }
+    return handled;
+}
+
+void reconcileMasterRoutes()
+{
+    for (size_t i = 0; i < ROUTE_COUNT; i++)
+    {
+        DeviceRoute &route = routes[i];
+        if (route.owner != DeviceOwner::Master || !route.desiredKnown || !route.dirty)
+        {
+            continue;
+        }
+
+        if (!setMasterRelayState(route.roomKey, route.deviceKey, route.desiredState))
+        {
+            continue;
+        }
+
+        route.actualKnown = true;
+        route.actualState = getMasterRelayState(route.roomKey, route.deviceKey);
+        route.actualBrightness = 0;
+        route.publishPending = true;
+        route.nextPublishMs = millis();
+        refreshDirty(route);
+    }
+}
+
+void updateActual(size_t routeIndex, bool state, uint8_t brightness)
+{
+    DeviceRoute &route = routes[routeIndex];
+    uint8_t normalizedBrightness = route.dimmable ? brightness : 0;
+    bool changed = !route.actualKnown ||
+                   route.actualState != state ||
+                   route.actualBrightness != normalizedBrightness;
+    route.actualKnown = true;
+    route.actualState = state;
+    route.actualBrightness = normalizedBrightness;
+    route.publishPending = route.publishPending || changed;
+    if (changed)
+    {
+        route.nextPublishMs = millis();
+    }
+    refreshDirty(route);
+    if (route.dirty)
+    {
+        route.nextRetryMs = millis();
+    }
+}
+
+bool publishActual(DeviceRoute &route)
+{
+    String path = String("/rooms/") + route.roomKey + "/tools/" + route.deviceKey;
+    char payload[96];
+    if (route.dimmable)
+    {
+        snprintf(payload, sizeof(payload), "{\"state\":%s,\"brightness\":%u}",
+                 route.actualState ? "true" : "false", static_cast<unsigned>(route.actualBrightness));
+    }
+    else
+    {
+        snprintf(payload, sizeof(payload), "{\"state\":%s}", route.actualState ? "true" : "false");
+    }
+
+    if (firebaseDatabase().set<object_t>(firebaseDataClient(), path, object_t(payload)))
+    {
+        Serial.print("Actual state published: ");
+        Serial.println(path);
+        return true;
+    }
+
+    Serial.print("Actual state publish failed: ");
+    Serial.print(path);
+    Serial.print(" error=");
+    Serial.println(firebaseDataClient().lastError().message());
+    return false;
+}
+
+void flushPendingRoomStates()
+{
+    if (!firebaseReady())
+    {
+        return;
+    }
+
+    unsigned long now = millis();
+    for (size_t offset = 0; offset < ROUTE_COUNT; offset++)
+    {
+        size_t routeIndex = (nextPublishRoute + offset) % ROUTE_COUNT;
+        DeviceRoute &route = routes[routeIndex];
+        if (!route.publishPending || !route.actualKnown ||
+            !deadlineReached(now, route.nextPublishMs))
+        {
+            continue;
+        }
+
+        nextPublishRoute = (routeIndex + 1) % ROUTE_COUNT;
+        if (publishActual(route))
+        {
+            route.publishPending = false;
+        }
+        else
+        {
+            route.nextPublishMs = millis() + PUBLISH_RETRY_MS;
+        }
+        return;
+    }
+}
+
+void clearPendingCycle(unsigned long retryDelayMs)
+{
+    if (!pendingCmd.active)
+    {
+        return;
+    }
+
+    DeviceRoute &route = routes[pendingCmd.routeIndex];
+    refreshDirty(route);
+    if (route.dirty)
+    {
+        route.nextRetryMs = millis() + retryDelayMs;
+    }
+    pendingCmd.active = false;
+    pendingCmd.waitingForAck = false;
+}
+
+void schedulePendingRetry(const char *reason)
+{
+    DeviceRoute &route = routes[pendingCmd.routeIndex];
+    Serial.print(reason);
+    Serial.print(": ");
+    Serial.print(route.roomKey);
+    Serial.print("/");
+    Serial.println(route.deviceKey);
+
+    pendingCmd.waitingForAck = false;
+    if (pendingCmd.attempts >= MAX_SEND_ATTEMPTS)
+    {
+        clearPendingCycle(CYCLE_BACKOFF_MS);
+        return;
+    }
+    pendingCmd.nextAttemptMs = millis() + SEND_RETRY_DELAY_MS;
+}
+
+void startPendingCycle(size_t routeIndex)
+{
+    DeviceRoute &route = routes[routeIndex];
+    pendingCmd = {};
+    pendingCmd.active = true;
+    pendingCmd.routeIndex = routeIndex;
+    pendingCmd.nextAttemptMs = millis();
+    pendingCmd.payload.type = CMD_TYPE_COMMAND;
+    strncpy(pendingCmd.payload.roomKey, route.roomKey, sizeof(pendingCmd.payload.roomKey) - 1);
+    strncpy(pendingCmd.payload.deviceKey, route.deviceKey, sizeof(pendingCmd.payload.deviceKey) - 1);
+    pendingCmd.payload.state = route.desiredState ? 1 : 0;
+    pendingCmd.payload.brightness = route.dimmable ? route.desiredBrightness : (route.desiredState ? 100 : 0);
+    String requestId = generateRequestId();
+    strncpy(pendingCmd.payload.requestId, requestId.c_str(), sizeof(pendingCmd.payload.requestId) - 1);
+    pendingCmd.payload.crc = computeXorCRC(reinterpret_cast<const uint8_t *>(&pendingCmd.payload), sizeof(pendingCmd.payload) - 1);
+}
+
+void startNextSlaveCycle()
+{
+    if (pendingCmd.active)
+    {
+        return;
+    }
+
+    unsigned long now = millis();
+    for (size_t offset = 0; offset < ROUTE_COUNT; offset++)
+    {
+        size_t routeIndex = (nextSlaveRoute + offset) % ROUTE_COUNT;
+        DeviceRoute &route = routes[routeIndex];
+        if (route.owner == DeviceOwner::Slave && route.desiredKnown && route.dirty &&
+            deadlineReached(now, route.nextRetryMs))
+        {
+            nextSlaveRoute = (routeIndex + 1) % ROUTE_COUNT;
+            startPendingCycle(routeIndex);
+            return;
+        }
+    }
+}
+
+void attemptPendingSend()
+{
+    if (pendingCmd.active)
+    {
+        DeviceRoute &route = routes[pendingCmd.routeIndex];
+        bool payloadIsCurrent = pendingCmd.payload.state == (route.desiredState ? 1 : 0) &&
+                                pendingCmd.payload.brightness ==
+                                    (route.dimmable ? route.desiredBrightness : (route.desiredState ? 100 : 0));
+        if (!payloadIsCurrent && !pendingCmd.waitingForAck)
+        {
+            pendingCmd.active = false;
+            return;
+        }
+    }
+
+    if (!pendingCmd.active || pendingCmd.waitingForAck ||
+        !deadlineReached(millis(), pendingCmd.nextAttemptMs))
+    {
+        return;
+    }
+
+    pendingCmd.attempts++;
+    if (!sendCommandToSlave(pendingCmd.payload))
+    {
+        schedulePendingRetry("ESP-NOW command queue failed");
+        return;
+    }
+
+    pendingCmd.waitingForAck = true;
+    pendingCmd.sentMs = millis();
+}
+
+void processSendResult()
+{
+    portENTER_CRITICAL(&espNowMux);
+    sendCallbackReceived = false;
+    portEXIT_CRITICAL(&espNowMux);
+
+    if (pendingCmd.active && pendingCmd.waitingForAck &&
+        millis() - pendingCmd.sentMs >= ACK_TIMEOUT_MS)
+    {
+        schedulePendingRetry("Slave ACK timeout");
+    }
+}
+
+void processStatePackets()
+{
+    DeviceStatePayload packet;
+    while (popReceivedStatePacket(packet))
+    {
+        uint8_t crc = computeXorCRC(reinterpret_cast<const uint8_t *>(&packet), sizeof(packet) - 1);
+        if (packet.type != CMD_TYPE_STATE || crc != packet.crc)
+        {
+            Serial.println("Invalid slave packet ignored");
+            continue;
+        }
+
+        packet.roomKey[sizeof(packet.roomKey) - 1] = '\0';
+        packet.deviceKey[sizeof(packet.deviceKey) - 1] = '\0';
+        packet.requestId[sizeof(packet.requestId) - 1] = '\0';
+        int routeIndex = findSlaveRoute(packet.roomKey, packet.deviceKey);
+        if (routeIndex < 0 || packet.state > 1 || packet.brightness > 100 || packet.success > 1)
+        {
+            Serial.println("Slave packet route/state invalid, ignored");
+            continue;
+        }
+
+        bool matchedAck = pendingCmd.active &&
+                          static_cast<size_t>(routeIndex) == pendingCmd.routeIndex &&
+                          strcmp(packet.requestId, pendingCmd.payload.requestId) == 0;
+        if (matchedAck)
+        {
+            if (packet.success)
+            {
+                updateActual(static_cast<size_t>(routeIndex), packet.state != 0, packet.brightness);
+                Serial.print("Slave ACK OK: ");
+            }
+            else
+            {
+                DeviceRoute &route = routes[routeIndex];
+                route.dirty = true;
+                route.nextRetryMs = millis() + CYCLE_BACKOFF_MS;
+                Serial.print("Slave ACK error code=");
+                Serial.print(packet.errorCode);
+                Serial.print(": ");
+            }
+            Serial.print(packet.roomKey);
+            Serial.print("/");
+            Serial.println(packet.deviceKey);
+            if (packet.success)
+            {
+                clearPendingCycle(0);
+            }
+            else
+            {
+                pendingCmd.active = false;
+                pendingCmd.waitingForAck = false;
+            }
+            continue;
+        }
+
+        if (packet.success && packet.requestId[0] == '\0')
+        {
+            updateActual(static_cast<size_t>(routeIndex), packet.state != 0, packet.brightness);
+            if (pendingCmd.active &&
+                static_cast<size_t>(routeIndex) == pendingCmd.routeIndex &&
+                !routes[routeIndex].dirty)
+            {
+                clearPendingCycle(0);
+            }
+            Serial.print("Slave report: ");
+            Serial.print(packet.roomKey);
+            Serial.print("/");
+            Serial.println(packet.deviceKey);
+        }
+        else
+        {
+            Serial.println("Unmatched slave ACK/error ignored");
+        }
+    }
+}
 }
 
 void handleFirebaseResult(AsyncResult &aResult)
 {
     if (!aResult.isResult())
+    {
         return;
+    }
 
     if (aResult.isError())
     {
         Firebase.printf("Error task: %s, msg: %s, code: %d\n", aResult.uid().c_str(), aResult.error().message().c_str(), aResult.error().code());
+        if (firebaseIsCurrentCommandStreamUid(aResult.uid()))
+        {
+            firebaseMarkCommandStreamInactive();
+        }
+        return;
     }
 
     if (!aResult.available())
+    {
         return;
+    }
 
     RealtimeDatabaseResult &stream = aResult.to<RealtimeDatabaseResult>();
-    if (stream.isStream())
+    if (stream.isStream() && firebaseIsCurrentCommandStreamUid(aResult.uid()))
     {
         handleCommandStream(stream);
     }
@@ -306,189 +755,94 @@ void handleFirebaseResult(AsyncResult &aResult)
 void handleCommandStream(RealtimeDatabaseResult &stream)
 {
     String event = stream.event();
+    if (event == "cancel" || event == "auth_revoked")
+    {
+        Serial.print("Firebase command stream stopped: ");
+        Serial.println(event);
+        firebaseMarkCommandStreamInactive();
+        return;
+    }
+
+    firebaseMarkCommandStreamActive();
     if (event == "keep-alive")
     {
         return;
     }
 
-    String path = stream.dataPath();
     String payload = stream.to<String>();
-
-    if (payload == "null" || path == "/")
+    if (payload.length() == 0 || payload == "null")
     {
         return;
     }
 
-    String fullPath = path;
+    String path = stream.dataPath();
+    String fullPath = path == "/" ? "/commands" : path;
     if (!fullPath.startsWith("/commands"))
     {
         fullPath = "/commands" + fullPath;
     }
 
-    if (fullPath.startsWith("/commands/rooms/"))
+    if (event == "patch" && processFlattenedPatch(fullPath, payload))
     {
-        String remainder = fullPath.substring(strlen("/commands/rooms/"));
-        int slashPos = remainder.indexOf('/');
-        if (slashPos < 0)
-        {
-            return;
-        }
-
-        String roomKey = remainder.substring(0, slashPos);
-        String devicePath = remainder.substring(slashPos + 1);
-        if (devicePath.endsWith("/state"))
-        {
-            devicePath = devicePath.substring(0, devicePath.length() - strlen("/state"));
-        }
-
-        if (devicePath.indexOf('/') >= 0)
-        {
-            Serial.println("Ignoring command with unsupported nested device path");
-            removeCommand(fullPath);
-            return;
-        }
-
-        String deviceKey = devicePath;
-
-        if (!isKnownDevice(roomKey, deviceKey))
-        {
-            Serial.println("Ignoring unknown room/device command");
-            removeCommand(fullPath);
-            return;
-        }
-
-        ParsedRoomCommand command = parseRoomCommand(roomKey, deviceKey, payload);
-        Serial.printf("Parsed room command: valid=%s, isOn=%s, brightness=%d\n", command.valid ? "true" : "false", command.isOn ? "ON" : "OFF", command.brightness);
-
-        if (!command.valid)
-        {
-            removeCommand(fullPath);
-            return;
-        }
-
-        DeviceOwner owner = getDeviceOwner(roomKey, deviceKey);
-        switch (owner)
-        {
-        case DeviceOwner::Master:
-            if (setMasterRelayState(roomKey, deviceKey, command.isOn))
-            {
-                setDeviceRoomState(roomKey, deviceKey, getMasterRelayState(roomKey, deviceKey));
-            }
-            else
-            {
-                Serial.println("Master relay command ignored: unknown relay device");
-            }
-            removeCommand(fullPath);
-            break;
-
-        case DeviceOwner::Slave:
-            forwardToSlave(roomKey, deviceKey, command.isOn, command.brightness, fullPath);
-            break;
-
-        case DeviceOwner::Unknown:
-            Serial.println("Ignoring unknown room/device command");
-            removeCommand(fullPath);
-            break;
-        }
         return;
     }
 
-    Serial.println("Ignoring command outside /commands/rooms contract");
+    if (fullPath == "/commands" || fullPath == "/commands/")
+    {
+        processCommandsSnapshot(payload);
+        return;
+    }
+    if (fullPath == "/commands/rooms" || fullPath == "/commands/rooms/")
+    {
+        processRoomsPayload(payload);
+        return;
+    }
+
+    const char *prefix = "/commands/rooms/";
+    if (!fullPath.startsWith(prefix))
+    {
+        Serial.println("Ignoring command outside canonical path");
+        return;
+    }
+
+    String remainder = fullPath.substring(strlen(prefix));
+    int roomSlash = remainder.indexOf('/');
+    if (roomSlash < 0)
+    {
+        processRoomPayload(remainder, payload);
+        return;
+    }
+
+    String roomKey = remainder.substring(0, roomSlash);
+    String devicePath = remainder.substring(roomSlash + 1);
+    if (devicePath == "tools")
+    {
+        processToolsPayload(roomKey, payload);
+        return;
+    }
+
+    const char *toolsPrefix = "tools/";
+    if (!devicePath.startsWith(toolsPrefix))
+    {
+        Serial.println("Ignoring non-canonical command path");
+        return;
+    }
+
+    String deviceKey = devicePath.substring(strlen(toolsPrefix));
+    if (deviceKey.length() == 0 || deviceKey.indexOf('/') >= 0)
+    {
+        Serial.println("Ignoring nested command field event");
+        return;
+    }
+    processDevicePayload(roomKey, deviceKey, payload);
 }
 
 void processSlaveCommunication()
 {
-    DeviceStatePayload pkt;
-    while (popReceivedStatePacket(pkt))
-    {
-        uint8_t computedCrc = computeXorCRC((uint8_t *)&pkt, sizeof(pkt) - 1);
-        if (computedCrc != pkt.crc)
-        {
-            Serial.println("Slave packet CRC mismatch, ignored");
-            continue;
-        }
-
-        if (pkt.type != CMD_TYPE_STATE)
-        {
-            continue;
-        }
-
-        pkt.roomKey[sizeof(pkt.roomKey) - 1] = '\0';
-        pkt.deviceKey[sizeof(pkt.deviceKey) - 1] = '\0';
-        pkt.requestId[sizeof(pkt.requestId) - 1] = '\0';
-
-        bool matchedAck = pendingCmd.active &&
-                          strcmp(pkt.requestId, pendingCmd.requestId) == 0 &&
-                          strcmp(pkt.roomKey, pendingCmd.roomKey) == 0 &&
-                          strcmp(pkt.deviceKey, pendingCmd.deviceKey) == 0;
-
-        if (matchedAck)
-        {
-            if (pkt.success)
-            {
-                setDeviceRoomState(String(pkt.roomKey), String(pkt.deviceKey), pkt.state != 0, pkt.brightness);
-                Serial.print("Slave ACK OK: ");
-            }
-            else
-            {
-                Serial.print("Slave ACK error code=");
-                Serial.print(pkt.errorCode);
-                Serial.print(": ");
-            }
-            Serial.print(pkt.roomKey);
-            Serial.print("/");
-            Serial.println(pkt.deviceKey);
-
-            removeCommand(String(pendingCmd.firebasePath));
-            pendingCmd.active = false;
-            continue;
-        }
-
-        if (isSlaveOwned(String(pkt.roomKey), String(pkt.deviceKey)))
-        {
-            setDeviceRoomState(String(pkt.roomKey), String(pkt.deviceKey), pkt.state != 0, pkt.brightness);
-            Serial.print("Slave report: ");
-            Serial.print(pkt.roomKey);
-            Serial.print("/");
-            Serial.print(pkt.deviceKey);
-            Serial.print(" state=");
-            Serial.print(pkt.state);
-            Serial.print(" brightness=");
-            Serial.println(pkt.brightness);
-        }
-    }
-
-    bool callbackReceived = false;
-    bool sendFailed = false;
-    {
-        portENTER_CRITICAL(&espNowMux);
-        if (pendingCmd.active && sendCallbackReceived)
-        {
-            sendCallbackReceived = false;
-            callbackReceived = true;
-            sendFailed = !lastSendSuccess;
-        }
-        portEXIT_CRITICAL(&espNowMux);
-    }
-
-    if (callbackReceived && sendFailed)
-    {
-        Serial.print("ESP-NOW send failed for: ");
-        Serial.print(pendingCmd.roomKey);
-        Serial.print("/");
-        Serial.println(pendingCmd.deviceKey);
-        removeCommand(String(pendingCmd.firebasePath));
-        pendingCmd.active = false;
-        return;
-    }
-
-    if (pendingCmd.active && millis() - pendingCmd.sentMs >= ESP_NOW_TIMEOUT_MS)
-    {
-        Serial.print("Slave ACK timeout: ");
-        Serial.print(pendingCmd.roomKey);
-        Serial.print("/");
-        Serial.println(pendingCmd.deviceKey);
-        removeCommand(String(pendingCmd.firebasePath));
-        pendingCmd.active = false;
-    }
+    processStatePackets();
+    processSendResult();
+    reconcileMasterRoutes();
+    startNextSlaveCycle();
+    attemptPendingSend();
+    flushPendingRoomStates();
 }

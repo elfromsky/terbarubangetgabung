@@ -25,7 +25,7 @@ void initRelays()
     lampuState = false;
     sanyoState = false;
 
-    Serial.println("Relays initialized (active-low): Lampu=21, Sanyo=5");
+    Serial.println("Relays initialized (active-low): Lampu=13, Sanyo=14");
 }
 
 void controlLampu(bool on)

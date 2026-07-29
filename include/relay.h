@@ -3,8 +3,8 @@
 
 #include <Arduino.h>
 
-#define RELAY_LAMPU_PIN 21
-#define RELAY_SANYO_PIN 5
+#define RELAY_LAMPU_PIN 13
+#define RELAY_SANYO_PIN 14
 
 void initRelays();
 void controlLampu(bool on);

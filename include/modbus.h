@@ -3,7 +3,7 @@
 
 #include <Arduino.h>
 
-const int RS485_DIR = 4;
+const int RS485_DIR = 21;
 
 float readModBus(uint16_t reg);
 

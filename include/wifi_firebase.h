@@ -6,6 +6,7 @@
 
 void initWiFi();
 void initNTP();
+void maintainConnections();
 String getTimestamp();
 bool isWiFiConnected();
 

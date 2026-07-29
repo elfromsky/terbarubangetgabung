@@ -14,8 +14,10 @@ bool sendSensorData(float temperature, float humidity, PzemData pzemData)
     }
 
     bool environmentConnected = temperature != -1 && humidity != -1;
-    String envJson = String("{\"temperature\":") + String(round(temperature * 10) / 10.0, 1) +
-                     ",\"humidity\":" + String(round(humidity * 10) / 10.0, 1) +
+    float reportedTemperature = environmentConnected ? temperature : 0;
+    float reportedHumidity = environmentConnected ? humidity : 0;
+    String envJson = String("{\"temperature\":") + String(round(reportedTemperature * 10) / 10.0, 1) +
+                     ",\"humidity\":" + String(round(reportedHumidity * 10) / 10.0, 1) +
                      ",\"connected\":" + (environmentConnected ? "true" : "false") + "}";
 
     if (!firebaseDatabase().set<object_t>(firebaseDataClient(), "/device/sensorData/environment", object_t(envJson.c_str())))

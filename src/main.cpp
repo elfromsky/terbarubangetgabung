@@ -1,7 +1,6 @@
 #include <HardwareSerial.h>
 #include "modbus.h"
 #include "pzem.h"
-#include "dimmer.h"
 #include "relay.h"
 #include "wifi_firebase.h"
 #include "esp_now_protocol.h"
@@ -15,6 +14,7 @@ const unsigned long FIREBASE_INTERVAL = 5000;
 const unsigned long SENSOR_POLL_INTERVAL = 500;
 unsigned long lastFirebaseUpload = 0;
 unsigned long lastSensorPoll = 0;
+unsigned long lastDiscoveryBeacon = 0;
 
 float latestTemperature = -1;
 float latestHumidity = -1;
@@ -108,10 +108,10 @@ void setup()
     if (initESPNow())
     {
         registerSlavePeer();
+        registerBroadcastPeer();
     }
 
     initializePZEM();
-    initializeDimmers();
 
     Serial.println("System Ready!");
 }
@@ -119,6 +119,14 @@ void setup()
 void loop()
 {
     unsigned long currentMillis = millis();
+
+    maintainConnections();
+
+    if (currentMillis - lastDiscoveryBeacon >= ESPNOW_DISCOVERY_INTERVAL_MS)
+    {
+        lastDiscoveryBeacon = currentMillis;
+        sendDiscoveryBeacon();
+    }
 
     checkFirebaseCommands();
     pollSensorsNonBlocking();
