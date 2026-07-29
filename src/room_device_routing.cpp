@@ -155,27 +155,32 @@ bool applyDeviceCommand(const DeviceCommandPayload &cmd, DeviceStatePayload &out
   uint8_t finalState;
   uint8_t finalBrightness;
 
+  if (cmd.brightness > 100) {
+    outState.success = ESPNOW_RESULT_ERROR;
+    outState.errorCode = ESPNOW_ERR_INVALID_BRIGHTNESS;
+    outState.timestamp = millis();
+    duplicateStore(cmd.requestId, cmd.roomKey, cmd.deviceKey,
+                   outState.state, outState.brightness,
+                   outState.success, outState.errorCode);
+    return false;
+  }
+
   if (cmd.state == ESPNOW_STATE_OFF) {
     finalState = ESPNOW_STATE_OFF;
-    finalBrightness = 0;
+    if (entry->isDimmable) {
+      finalBrightness = cmd.brightness > 0
+        ? cmd.brightness
+        : getDimmerBrightness(entry->dimmerChannel);
+    } else {
+      finalBrightness = 0;
+    }
   } else if (cmd.state == ESPNOW_STATE_ON) {
     finalState = ESPNOW_STATE_ON;
     finalBrightness = cmd.brightness;
 
-    if (finalBrightness > 100) {
-      outState.success = ESPNOW_RESULT_ERROR;
-      outState.errorCode = ESPNOW_ERR_INVALID_BRIGHTNESS;
-      outState.timestamp = millis();
-      duplicateStore(cmd.requestId, cmd.roomKey, cmd.deviceKey,
-                     outState.state, outState.brightness,
-                     outState.success, outState.errorCode);
-      return false;
-    }
-
     if (entry->isDimmable) {
       if (finalBrightness == 0) {
-        finalState = ESPNOW_STATE_OFF;
-        finalBrightness = 0;
+        finalBrightness = 1;
       }
     } else {
       finalBrightness = 100;
@@ -194,11 +199,19 @@ bool applyDeviceCommand(const DeviceCommandPayload &cmd, DeviceStatePayload &out
   setRelayState(entry->relayId, (finalState == ESPNOW_STATE_ON));
 
   if (entry->dimmerChannel > 0) {
-    if (finalState == ESPNOW_STATE_ON) {
-      setDimmerBrightness(entry->dimmerChannel, finalBrightness);
-    } else if (!hasOtherActiveRelayOnDimmer(entry)) {
-      setDimmerBrightness(entry->dimmerChannel, 0);
+    bool channelNeeded = finalState == ESPNOW_STATE_ON ||
+                         hasOtherActiveRelayOnDimmer(entry);
+    if (channelNeeded && finalBrightness == 0) {
+      finalBrightness = 1;
     }
+    if (!channelNeeded) {
+      setDimmerOutputEnabled(entry->dimmerChannel, false);
+    }
+    setDimmerBrightness(entry->dimmerChannel, finalBrightness);
+    if (channelNeeded) {
+      setDimmerOutputEnabled(entry->dimmerChannel, true);
+    }
+    finalBrightness = getDimmerBrightness(entry->dimmerChannel);
   }
 
   // ── Fill ACK ──
@@ -235,7 +248,7 @@ void buildPeriodicStateForDevice(uint8_t index, DeviceStatePayload &outState) {
   outState.state = relayOn ? ESPNOW_STATE_ON : ESPNOW_STATE_OFF;
 
   if (entry.isDimmable) {
-    outState.brightness = relayOn ? getDimmerBrightness(entry.dimmerChannel) : 0;
+    outState.brightness = getDimmerBrightness(entry.dimmerChannel);
   } else {
     outState.brightness = relayOn ? 100 : 0;
   }

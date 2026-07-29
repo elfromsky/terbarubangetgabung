@@ -81,6 +81,10 @@ pio device list
 - Relay aktif sekarang berjumlah `8` channel.
 - Logika relay di code sekarang active-low. Asumsi wiring `NC-COM` tetap harus diverifikasi di hardware nyata.
 - EEPROM sudah dihapus dari codebase ini. State relay dan dimmer sekarang hanya hidup selama runtime board aktif.
+- `kamar_1/lampu` dan `kamar_2/lampu` memiliki relay independen dan berbagi brightness dimmer channel 1.
+- Brightness dimmer tetap tersimpan saat relay OFF; command ON dengan brightness `0` dinormalisasi menjadi `1`.
+- ACK dikirim langsung setelah command. Command dimmable juga memicu full state snapshot agar shared brightness segera sinkron.
+- Command receive memakai salinan atomik satu slot. Master mengirim serial dan melakukan retry saat ACK hilang.
 - Dokumentasi lama di root bisa berbeda dari code aktif. Saat ragu, code aktif menang.
 
 ## Batasan Dokumen Ini

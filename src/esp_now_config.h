@@ -10,6 +10,13 @@ extern const uint8_t MASTER_MAC[6];
 // ESP-NOW message types
 #define ESPNOW_MSG_DEVICE_COMMAND 1
 #define ESPNOW_MSG_DEVICE_STATE 2
+#define ESPNOW_MSG_DISCOVERY_BEACON 3
+
+#define ESPNOW_DISCOVERY_MAGIC 0xA5C35A7EUL
+#define ESPNOW_SCAN_MIN_CHANNEL 1
+#define ESPNOW_SCAN_MAX_CHANNEL 13
+#define ESPNOW_SCAN_DWELL_MS 500UL
+#define ESPNOW_LINK_TIMEOUT_MS 30000UL
 
 // Device state values
 #define ESPNOW_STATE_OFF 0
@@ -55,16 +62,27 @@ struct DeviceStatePayload {
   uint8_t crc;                     // XOR CRC over all preceding bytes
 } __attribute__((packed));
 
+struct DiscoveryBeaconPayload {
+  uint8_t type;
+  uint8_t channel;
+  uint32_t magic;
+  uint8_t crc;
+} __attribute__((packed));
+
 static_assert(sizeof(DeviceStatePayload) == 98,
   "DeviceStatePayload size mismatch — master and slave must agree");
+static_assert(sizeof(DiscoveryBeaconPayload) == 7,
+  "DiscoveryBeaconPayload size mismatch");
 
 // Function declarations
 void initEspNow();
+bool isEspNowReady();
+void scanEspNowChannel();
+void checkEspNowLinkTimeout();
 void sendStateToMaster(const DeviceStatePayload &state);
 bool validateCommandCRC(const DeviceCommandPayload &cmd);
 bool validateStateCRC(const DeviceStatePayload &state);
 uint8_t computeCRC(const uint8_t *data, uint16_t len);
-DeviceCommandPayload* getReceivedCommand();
-void setCommandPending(bool pending);
+bool popReceivedCommand(DeviceCommandPayload &command);
 
 #endif

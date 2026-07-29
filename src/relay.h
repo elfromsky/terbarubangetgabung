@@ -5,13 +5,13 @@
 #include "esp_now_config.h"
 
 // Pin assignments (8 relay)
-#define RELAY_1_PIN  38  // Lorong Stop Kontak
-#define RELAY_2_PIN  39  // Lorong Blower
-#define RELAY_3_PIN  40  // Kamar 1 Stop Kontak
-#define RELAY_4_PIN  41  // Kamar 1 Lampu
-#define RELAY_5_PIN  16  // Kamar 2 Stop Kontak
-#define RELAY_6_PIN  8   // Kamar 2 Lampu
-#define RELAY_7_PIN  9   // Dapur Lampu
+#define RELAY_1_PIN  4  // Lorong Stop Kontak
+#define RELAY_2_PIN  5  // Lorong Blower
+#define RELAY_3_PIN  6  // Kamar 1 Stop Kontak
+#define RELAY_4_PIN  7  // Kamar 1 Lampu
+#define RELAY_5_PIN  8  // Kamar 2 Stop Kontak
+#define RELAY_6_PIN  9   // Kamar 2 Lampu
+#define RELAY_7_PIN  10   // Dapur Lampu
 #define RELAY_8_PIN  11  // Dapur Blower
 
 // Named relay IDs for routing

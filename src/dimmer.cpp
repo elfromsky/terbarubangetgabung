@@ -101,7 +101,7 @@ void setDimmerBrightness(uint8_t channel, uint8_t brightness) {
   }
 
   if (channel == 1) {
-    ch1_active = active;
+    if (!active) ch1_active = false;
     delayTime1 = delay;
     currentBrightness1 = brightness;
 
@@ -110,11 +110,25 @@ void setDimmerBrightness(uint8_t channel, uint8_t brightness) {
     }
 
   } else if (channel == 2) {
-    ch2_active = active;
+    if (!active) ch2_active = false;
     delayTime2 = delay;
     currentBrightness2 = brightness;
 
     if (!active) {
+      digitalWrite(DIMMER_2_PIN, LOW);
+    }
+  }
+}
+
+void setDimmerOutputEnabled(uint8_t channel, bool enabled) {
+  if (channel == 1) {
+    ch1_active = enabled && currentBrightness1 > 0;
+    if (!ch1_active) {
+      digitalWrite(DIMMER_1_PIN, LOW);
+    }
+  } else if (channel == 2) {
+    ch2_active = enabled && currentBrightness2 > 0;
+    if (!ch2_active) {
       digitalWrite(DIMMER_2_PIN, LOW);
     }
   }

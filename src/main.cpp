@@ -3,14 +3,29 @@
 #include "esp_now_config.h"
 #include "room_device_routing.h"
 
-// External functions from esp_now_handler.cpp
-extern void setCommandPending(bool pending);
-extern DeviceCommandPayload *getReceivedCommand();
-extern uint32_t getLastCommandTime();
-
 // Status reporting interval
 const unsigned long STATUS_INTERVAL = 5000;
 unsigned long lastStatusReport = 0;
+bool bootSnapshotSent = false;
+
+void sendFullStateSnapshot(const char *startMessage, const char *endMessage)
+{
+    Serial.println(startMessage);
+
+    DeviceStatePayload statePayload;
+    uint8_t count = getDeviceCount();
+    for (uint8_t i = 0; i < count; i++)
+    {
+        buildPeriodicStateForDevice(i, statePayload);
+        sendStateToMaster(statePayload);
+        delay(20);
+    }
+
+    if (endMessage != nullptr)
+    {
+        Serial.println(endMessage);
+    }
+}
 
 void setup()
 {
@@ -30,41 +45,51 @@ void setup()
     Serial.println("Initializing ESP-NOW...");
     initEspNow();
 
-    // Send immediate full-state snapshot so master can resync before first periodic report
-    Serial.println("Sending boot state snapshot...");
-    {
-        DeviceStatePayload statePayload;
-        uint8_t count = getDeviceCount();
-        for (uint8_t i = 0; i < count; i++)
-        {
-            buildPeriodicStateForDevice(i, statePayload);
-            sendStateToMaster(statePayload);
-            delay(20);
-        }
-    }
-
-    Serial.println("System Ready - Waiting for commands from master");
+    Serial.println("System Ready - Scanning for master");
 }
 
 void loop()
 {
     unsigned long currentMillis = millis();
 
-    // Check for received ESP-NOW command
-    DeviceCommandPayload *cmd = getReceivedCommand();
-    if (cmd != nullptr)
-    {
-        setCommandPending(false);
+    scanEspNowChannel();
+    checkEspNowLinkTimeout();
 
+    if (!isEspNowReady())
+    {
+        delay(50);
+        return;
+    }
+
+    if (!bootSnapshotSent)
+    {
+        bootSnapshotSent = true;
+        sendFullStateSnapshot("Sending boot state snapshot...", nullptr);
+        lastStatusReport = currentMillis;
+    }
+
+    // Check for received ESP-NOW command
+    DeviceCommandPayload cmd;
+    if (popReceivedCommand(cmd))
+    {
         Serial.printf("Command: room=%s, device=%s, state=%d, brightness=%d, reqId=%s\n",
-                      cmd->roomKey, cmd->deviceKey, cmd->state, cmd->brightness, cmd->requestId);
+                      cmd.roomKey, cmd.deviceKey, cmd.state, cmd.brightness, cmd.requestId);
 
         // Apply command via semantic routing layer
         DeviceStatePayload statePayload;
-        applyDeviceCommand(*cmd, statePayload);
+        applyDeviceCommand(cmd, statePayload);
 
         // Always send ACK back (even on failure)
         sendStateToMaster(statePayload);
+        delay(20);
+
+        // Shared dimmer state must reach every semantic device immediately.
+        if (isDimmableDevice(cmd.roomKey, cmd.deviceKey))
+        {
+            sendFullStateSnapshot("Sending dimmer state snapshot...", nullptr);
+            lastStatusReport = millis();
+            currentMillis = lastStatusReport;
+        }
     }
 
     // Send periodic full status every 5 seconds
@@ -72,18 +97,7 @@ void loop()
     {
         lastStatusReport = currentMillis;
 
-        Serial.println("--- STATUS REPORT ---");
-
-        DeviceStatePayload statePayload;
-        uint8_t count = getDeviceCount();
-        for (uint8_t i = 0; i < count; i++)
-        {
-            buildPeriodicStateForDevice(i, statePayload);
-            sendStateToMaster(statePayload);
-            delay(20);
-        }
-
-        Serial.println("--- END STATUS ---");
+        sendFullStateSnapshot("--- STATUS REPORT ---", "--- END STATUS ---");
     }
 
     delay(50);
