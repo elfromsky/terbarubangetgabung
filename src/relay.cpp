@@ -8,7 +8,8 @@ namespace
     void setRelayPin(uint8_t pin, bool &state, bool on, const char *label)
     {
         state = on;
-        digitalWrite(pin, on ? LOW : HIGH);
+        // Active-low relay input with NC-COM load wiring.
+        digitalWrite(pin, on ? HIGH : LOW);
         Serial.print(label);
         Serial.print(": ");
         Serial.println(on ? "ON" : "OFF");
@@ -20,12 +21,12 @@ void initRelays()
     pinMode(RELAY_LAMPU_PIN, OUTPUT);
     pinMode(RELAY_SANYO_PIN, OUTPUT);
 
-    digitalWrite(RELAY_LAMPU_PIN, HIGH);
-    digitalWrite(RELAY_SANYO_PIN, HIGH);
+    digitalWrite(RELAY_LAMPU_PIN, LOW);
+    digitalWrite(RELAY_SANYO_PIN, LOW);
     lampuState = false;
     sanyoState = false;
 
-    Serial.println("Relays initialized (active-low): Lampu=13, Sanyo=14");
+    Serial.println("Relays initialized (active-low input, NC-COM load): OFF=LOW, ON=HIGH; Lampu=13, Sanyo=14");
 }
 
 void controlLampu(bool on)

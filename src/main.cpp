@@ -7,8 +7,8 @@
 
 HardwareSerial SensorSerial(2);
 
-#define RXD2 18
-#define TXD2 17
+#define RXD2 41
+#define TXD2 42
 
 const unsigned long FIREBASE_INTERVAL = 5000;
 const unsigned long SENSOR_POLL_INTERVAL = 500;
