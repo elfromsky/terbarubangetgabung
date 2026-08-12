@@ -6,8 +6,8 @@
 
 // Pin definitions
 #define ZERO_CROSS_PIN  14
-#define DIMMER_1_PIN    15  // Kamar 1 & 2
-#define DIMMER_2_PIN    16  // Dapur
+#define DIMMER_1_PIN    16  // Kamar 1 & 2
+#define DIMMER_2_PIN    15  // Dapur
 
 // Max dimmer channel
 #define DIMMER_COUNT 2

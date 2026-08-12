@@ -20,15 +20,15 @@ void initRelays() {
   for (int i = 0; i < RELAY_COUNT; i++) {
     pinMode(relayPins[i], OUTPUT);
 
-    // Relay diset LOW trigger:
-    // LOW  = ON
-    // HIGH = OFF
-    digitalWrite(relayPins[i], HIGH);
+    // Active-low relay input with NC-COM load wiring:
+    // LOW  = coil active, load OFF
+    // HIGH = coil inactive, load ON
+    digitalWrite(relayPins[i], LOW);
 
     relayStates[i] = false;
   }
 
-  Serial.println("Relay Module Initialized (Active-LOW Mode).");
+  Serial.println("Relay Module Initialized (active-low input, NC-COM load): OFF=LOW, ON=HIGH.");
 }
 
 void setRelayState(uint8_t relayId, bool state) {
@@ -38,10 +38,8 @@ void setRelayState(uint8_t relayId, bool state) {
   }
 
   int idx = relayId - 1;
-  // Relay LOW trigger:
-  // state true  -> LOW  -> ON
-  // state false -> HIGH -> OFF
-  digitalWrite(relayPins[idx], state ? LOW : HIGH);
+  // State represents load state; GPIO level accounts for NC-COM wiring.
+  digitalWrite(relayPins[idx], state ? HIGH : LOW);
 
   relayStates[idx] = state;
 

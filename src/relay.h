@@ -31,7 +31,7 @@
 // Max relay ID
 #define RELAY_COUNT 8
 
-// Initialize all relay pins, set all LOW
+// Initialize all relay pins LOW so NC-COM loads start OFF.
 void initRelays();
 
 // Set single relay state (0=OFF, 1=ON)
