@@ -99,13 +99,15 @@ class HistoryBloc extends Bloc<HistoryEvent, HistoryState> {
     final energyData = <ChartPoint>[];
     final temperatureData = <ChartPoint>[];
     final humidityData = <ChartPoint>[];
+    final estimatedCostData = <ChartPoint>[];
+    final estimatedEmissionData = <ChartPoint>[];
 
     // sort data by timestamp ascending
     final sortedData = List<HistoricalMcbData>.from(data);
     sortedData.sort((a, b) => a.timestamp.compareTo(b.timestamp));
 
     // save last values to apply tolerance filter
-    double? lastV, lastI, lastP, lastE, lastT, lastH;
+    double? lastV, lastI, lastP, lastE, lastT, lastH, lastC, lastEm;
 
     // threshold values to ignore minor fluctuations
     const toleranceV = 0.5;
@@ -114,6 +116,8 @@ class HistoryBloc extends Bloc<HistoryEvent, HistoryState> {
     const toleranceE = 0.005;
     const toleranceT = 0.3;
     const toleranceH = 1.0;
+    const toleranceC = 100.0;
+    const toleranceEm = 0.05;
 
     for (int i = 0; i < sortedData.length; i++) {
       final record = sortedData[i];
@@ -171,6 +175,34 @@ class HistoryBloc extends Bloc<HistoryEvent, HistoryState> {
           );
           lastE = e;
         }
+
+        final cost = record.estimatedCost;
+        if (isFirstOrLast || lastC == null || (cost - lastC).abs() >= toleranceC) {
+          estimatedCostData.add(
+            ChartPoint(
+              x: time,
+              y: cost,
+              mcbName: 'MCB',
+              timestamp: record.timestamp,
+            ),
+          );
+          lastC = cost;
+        }
+
+        final emission = record.estimatedEmission;
+        if (isFirstOrLast ||
+            lastEm == null ||
+            (emission - lastEm).abs() >= toleranceEm) {
+          estimatedEmissionData.add(
+            ChartPoint(
+              x: time,
+              y: emission,
+              mcbName: 'MCB',
+              timestamp: record.timestamp,
+            ),
+          );
+          lastEm = emission;
+        }
       }
 
       if (record.sensorData != null) {
@@ -209,6 +241,8 @@ class HistoryBloc extends Bloc<HistoryEvent, HistoryState> {
       energyData: energyData,
       temperatureData: temperatureData,
       humidityData: humidityData,
+      estimatedCostData: estimatedCostData,
+      estimatedEmissionData: estimatedEmissionData,
     );
   }
 }

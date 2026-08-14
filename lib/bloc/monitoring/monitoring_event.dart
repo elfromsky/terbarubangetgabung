@@ -20,6 +20,18 @@ class ConnectionStatusChanged extends MonitoringEvent {
   ConnectionStatusChanged(this.isConnected);
 }
 
+class SlaveAvailabilityChanged extends MonitoringEvent {
+  final bool? slaveOnline;
+
+  SlaveAvailabilityChanged(this.slaveOnline);
+}
+
+class MonitoringFreshnessExpired extends MonitoringEvent {
+  final int generation;
+
+  MonitoringFreshnessExpired(this.generation);
+}
+
 class ControlRoomDevice extends MonitoringEvent {
   final String roomName;
   final String roomKey;

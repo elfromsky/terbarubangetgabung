@@ -5,6 +5,7 @@ import 'package:esh/features/history/data/datasources/firebase_history_data_sour
 import 'package:esh/features/history/data/repositories/history_repository_impl.dart';
 import 'package:esh/features/history/domain/repositories/history_repository.dart';
 import 'package:esh/features/history/domain/usecases/load_history_data_use_case.dart';
+import 'package:esh/features/history/domain/usecases/save_sensor_log_use_case.dart';
 import 'package:esh/features/monitoring/data/datasources/firebase_monitoring_data_source.dart';
 import 'package:esh/features/monitoring/data/datasources/firebase_room_device_data_source.dart';
 import 'package:esh/features/monitoring/data/repositories/monitoring_repository_impl.dart';
@@ -15,10 +16,11 @@ import 'package:esh/features/monitoring/domain/usecases/estimate_energy_cost_use
 import 'package:esh/features/monitoring/domain/usecases/watch_connection_status_use_case.dart';
 import 'package:esh/features/monitoring/domain/usecases/watch_monitoring_data_use_case.dart';
 import 'package:esh/features/monitoring/domain/usecases/watch_room_devices_use_case.dart';
+import 'package:esh/features/monitoring/domain/usecases/watch_slave_availability_use_case.dart';
 import 'package:firebase_database/firebase_database.dart';
 
 class AppDependencies {
-  static const defaultElectricityRate = 1699.53;
+  static const defaultElectricityRate = 1440.70;
   static const defaultEmissionFactor = 0.85;
 
   final MonitoringRepository monitoringRepository;
@@ -44,6 +46,13 @@ class AppDependencies {
     );
     final historyDataSource = FirebaseHistoryDataSource(firestore: firestore);
 
+    final estimateEnergyCost = const EstimateEnergyCostUseCase(
+      ratePerKwh: defaultElectricityRate,
+    );
+    final estimateEmission = const EstimateEmissionUseCase(
+      emissionFactorKgCo2PerKwh: defaultEmissionFactor,
+    );
+
     return AppDependencies(
       monitoringRepository: MonitoringRepositoryImpl(
         monitoringDataSource: monitoringDataSource,
@@ -51,14 +60,16 @@ class AppDependencies {
       ),
       historyRepository: HistoryRepositoryImpl(
         historyDataSource: historyDataSource,
+        estimateEnergyCost: estimateEnergyCost,
+        estimateEmission: estimateEmission,
       ),
-      estimateEnergyCost: const EstimateEnergyCostUseCase(
-        ratePerKwh: defaultElectricityRate,
-      ),
-      estimateEmission: const EstimateEmissionUseCase(
-        emissionFactorKgCo2PerKwh: defaultEmissionFactor,
-      ),
+      estimateEnergyCost: estimateEnergyCost,
+      estimateEmission: estimateEmission,
     );
+  }
+
+  SaveSensorLogUseCase get saveSensorLogUseCase {
+    return SaveSensorLogUseCase(repository: historyRepository);
   }
 
   MonitoringBloc createMonitoringBloc() {
@@ -72,9 +83,13 @@ class AppDependencies {
       watchRoomDevices: WatchRoomDevicesUseCase(
         repository: monitoringRepository,
       ),
+      watchSlaveAvailability: WatchSlaveAvailabilityUseCase(
+        repository: monitoringRepository,
+      ),
       controlRoomDevice: ControlRoomDeviceUseCase(
         repository: monitoringRepository,
       ),
+      saveSensorLog: saveSensorLogUseCase,
     );
   }
 

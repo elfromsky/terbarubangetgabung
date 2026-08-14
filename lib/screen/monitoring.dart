@@ -3,7 +3,6 @@ import 'package:esh/bloc/monitoring/monitoring_event.dart';
 import 'package:esh/bloc/monitoring/monitoring_state.dart';
 import 'package:esh/features/monitoring/domain/entities/mcb_data.dart';
 import 'package:esh/features/monitoring/domain/entities/mcb_data_collection.dart';
-import 'package:esh/features/monitoring/domain/entities/room_device_collection.dart';
 import 'package:esh/features/monitoring/domain/entities/room_device_state.dart';
 import 'package:esh/features/monitoring/domain/entities/sensor_data.dart';
 import 'package:esh/features/monitoring/domain/usecases/estimate_emission_use_case.dart';
@@ -110,6 +109,8 @@ class _MonitoringViewState extends State<MonitoringView> {
                   }
 
                   if (state is MonitoringLoaded) {
+                    final powerDataVisible = state.canShowPowerData;
+                    final environmentDataVisible = state.canShowEnvironmentData;
                     final totalEstimatedCost = estimateEnergyCost(
                       energyKwh: state.mcbData.totalEnergy,
                     );
@@ -120,11 +121,17 @@ class _MonitoringViewState extends State<MonitoringView> {
                       padding: const EdgeInsets.all(16.0),
                       child: Column(
                         children: [
-                          _buildConnectionStatus(state.isConnected),
+                          _buildSystemStatuses(state),
                           const SizedBox(height: 16),
 
                           if (_selectedCategory == 'Listrik') ...[
-                            _buildMcbGauges(context, state.mcbData),
+                            _buildMcbGauges(
+                              context,
+                              state.mcbData,
+                              powerDataVisible,
+                              state.isPowerSampleFresh,
+                              state.canControl,
+                            ),
                             const SizedBox(height: 16),
                             Container(
                               padding: const EdgeInsets.all(16),
@@ -144,7 +151,9 @@ class _MonitoringViewState extends State<MonitoringView> {
                                       Expanded(
                                         child: _buildMetricCard(
                                           'Est. Cost',
-                                          'Rp ${totalEstimatedCost.toStringAsFixed(0)}',
+                                          powerDataVisible
+                                              ? 'Rp ${totalEstimatedCost.toStringAsFixed(0)}'
+                                              : '#',
                                           '',
                                           Colors.amber,
                                         ),
@@ -153,7 +162,9 @@ class _MonitoringViewState extends State<MonitoringView> {
                                       Expanded(
                                         child: _buildMetricCard(
                                           'Est. Emission',
-                                          '${totalEstimatedEmissions.toStringAsFixed(2)} kg CO₂',
+                                          powerDataVisible
+                                              ? '${totalEstimatedEmissions.toStringAsFixed(2)} kg CO₂'
+                                              : '#',
                                           '',
                                           Colors.greenAccent,
                                         ),
@@ -165,13 +176,14 @@ class _MonitoringViewState extends State<MonitoringView> {
                             ),
                           ] else if (_selectedCategory ==
                               'Suhu & Kelembapan') ...[
-                            _buildSensorSection(state.mcbData.sensorData),
-                          ] else ...[
-                            _buildElektronikSection(
-                              state.deviceData,
-                              state.pendingDevices,
-                              state.commandErrors,
+                            _buildSensorSection(
+                              state.mcbData.sensorData,
+                              environmentDataVisible,
+                              state.isEnvironmentSampleFresh,
+                              state.canControl,
                             ),
+                          ] else ...[
+                            _buildElektronikSection(state),
                           ],
                         ],
                       ),
@@ -223,7 +235,26 @@ class _MonitoringViewState extends State<MonitoringView> {
     );
   }
 
-  Widget _buildSensorSection(SensorData sensor) {
+  Widget _buildSensorSection(
+    SensorData sensor,
+    bool dataVisible,
+    bool sampleFresh,
+    bool upstreamAvailable,
+  ) {
+    final moduleStatus = !upstreamAvailable
+        ? 'Status tidak tersedia'
+        : !sensor.connected
+        ? 'Module Offline'
+        : sampleFresh
+        ? 'Module Online'
+        : 'Sampel Kedaluwarsa';
+    final moduleStatusColor = !upstreamAvailable
+        ? Colors.grey
+        : !sensor.connected
+        ? Colors.grey
+        : sampleFresh
+        ? Colors.green
+        : Colors.amber;
     return Column(
       children: [
         Container(
@@ -232,16 +263,19 @@ class _MonitoringViewState extends State<MonitoringView> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text('Sensor DHT', style: _textStyle(bold: true, size: 18)),
+              Text(
+                'Monitoring Lingkungan',
+                style: _textStyle(bold: true, size: 18),
+              ),
               const SizedBox(height: 4),
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                 decoration: BoxDecoration(
-                  color: sensor.connected ? Colors.green : Colors.grey,
+                  color: moduleStatusColor,
                   borderRadius: BorderRadius.circular(12),
                 ),
                 child: Text(
-                  sensor.connected ? 'Online' : 'Offline',
+                  moduleStatus,
                   style: const TextStyle(
                     color: Colors.white,
                     fontSize: 12,
@@ -259,6 +293,7 @@ class _MonitoringViewState extends State<MonitoringView> {
                       '°C',
                       maxValue: 50,
                       color: _getTempColor(sensor.temperature),
+                      showValue: dataVisible,
                     ),
                   ),
                   const SizedBox(width: 16),
@@ -266,9 +301,10 @@ class _MonitoringViewState extends State<MonitoringView> {
                     child: _buildGaugeCard(
                       'Kelembapan',
                       sensor.humidity,
-                      '%',
+                      '%RH',
                       maxValue: 100,
                       color: _getHumidColor(sensor.humidity),
+                      showValue: dataVisible,
                     ),
                   ),
                 ],
@@ -279,7 +315,9 @@ class _MonitoringViewState extends State<MonitoringView> {
                   Expanded(
                     child: _buildMetricCard(
                       'Indeks Panas',
-                      '${sensor.heatIndex.toStringAsFixed(1)} °C',
+                      dataVisible
+                          ? '${sensor.heatIndex.toStringAsFixed(1)} °C'
+                          : '#',
                       '',
                       Colors.deepOrange,
                     ),
@@ -287,13 +325,20 @@ class _MonitoringViewState extends State<MonitoringView> {
                   const SizedBox(width: 8),
                   Expanded(
                     child: _buildMetricCard(
-                      'Kenyamanan',
-                      sensor.comfortLevel,
+                      'Temperature Category',
+                      dataVisible ? sensor.temperatureCategory : '#',
                       '',
-                      _getComfortColor(sensor.comfortLevel),
+                      _getCategoryColor(sensor.temperatureCategory),
                     ),
                   ),
                 ],
+              ),
+              const SizedBox(height: 8),
+              _buildMetricCard(
+                'Humidity Category',
+                dataVisible ? sensor.humidityCategory : '#',
+                '',
+                _getCategoryColor(sensor.humidityCategory),
               ),
             ],
           ),
@@ -314,10 +359,13 @@ class _MonitoringViewState extends State<MonitoringView> {
     return Colors.green;
   }
 
-  Color _getComfortColor(String level) {
+  Color _getCategoryColor(String level) {
     switch (level) {
-      case 'Nyaman':
+      case 'Sejuk':
+      case 'Normal':
         return Colors.green;
+      case 'Hangat':
+        return Colors.amber;
       case 'Panas':
         return Colors.red;
       case 'Dingin':
@@ -331,31 +379,39 @@ class _MonitoringViewState extends State<MonitoringView> {
     }
   }
 
-  Widget _buildElektronikSection(
-    RoomDeviceCollection deviceData,
-    Set<DeviceAddress> pendingDevices,
-    Map<DeviceAddress, String> commandErrors,
-  ) {
+  Widget _buildElektronikSection(MonitoringLoaded state) {
     return Column(
-      children: roomDeviceConfigs.map((roomConfig) {
-        return Padding(
-          padding: const EdgeInsets.only(bottom: 16),
-          child: _buildRoomElectronicCard(
-            roomConfig,
-            deviceData,
-            pendingDevices,
-            commandErrors,
+      children: [
+        if (state.slaveOnline != true)
+          Container(
+            width: double.infinity,
+            margin: const EdgeInsets.only(bottom: 16),
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: Colors.red.withValues(alpha: 0.2),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: Colors.red),
+            ),
+            child: Text(
+              state.slaveOnline == null
+                  ? 'Status perangkat Slave belum tersedia.'
+                  : 'Status perangkat Slave tidak tersedia.',
+              style: const TextStyle(color: Colors.white),
+            ),
           ),
-        );
-      }).toList(),
+        ...roomDeviceConfigs.map((roomConfig) {
+          return Padding(
+            padding: const EdgeInsets.only(bottom: 16),
+            child: _buildRoomElectronicCard(roomConfig, state),
+          );
+        }),
+      ],
     );
   }
 
   Widget _buildRoomElectronicCard(
     RoomDeviceConfig roomConfig,
-    RoomDeviceCollection deviceData,
-    Set<DeviceAddress> pendingDevices,
-    Map<DeviceAddress, String> commandErrors,
+    MonitoringLoaded state,
   ) {
     return Container(
       padding: const EdgeInsets.all(16),
@@ -384,10 +440,11 @@ class _MonitoringViewState extends State<MonitoringView> {
               deviceKey: device.deviceKey,
             );
             final viewState = mapDeviceControlViewState(
-              visibleDevices: deviceData,
+              visibleDevices: state.deviceData,
               address: address,
-              isPending: pendingDevices.contains(address),
-              errorMessage: commandErrors[address],
+              isPending: state.pendingDevices.contains(address),
+              errorMessage: state.commandErrors[address],
+              isAvailable: state.canShowDeviceState(address),
             );
             return DeviceStatusCard(
               name: device.displayName,
@@ -400,33 +457,86 @@ class _MonitoringViewState extends State<MonitoringView> {
     );
   }
 
-  Widget _buildConnectionStatus(bool isConnected) {
+  Widget _buildSystemStatuses(MonitoringLoaded state) {
+    final eshOnline = state.eshStatus == EshSystemStatus.online;
+    final eshColor = state.isEshStatusStale
+        ? Colors.amber
+        : eshOnline
+        ? Colors.green
+        : state.eshStatus == EshSystemStatus.offline
+        ? Colors.red
+        : Colors.grey;
+    final eshLabel = switch (state.eshStatus) {
+      EshSystemStatus.online => 'Online',
+      EshSystemStatus.offline => 'Offline',
+      EshSystemStatus.unknown => 'Tidak diketahui',
+    };
+    return Column(
+      children: [
+        _buildConnectionStatus(
+          title: 'Status ESH',
+          value: state.isEshStatusStale ? '$eshLabel (stale)' : eshLabel,
+          color: eshColor,
+          icon: eshOnline ? Icons.memory : Icons.developer_board_off,
+        ),
+        const SizedBox(height: 8),
+        _buildConnectionStatus(
+          title: 'Koneksi Firebase',
+          value: state.isConnected ? 'Terhubung' : 'Terputus',
+          color: state.isConnected ? Colors.green : Colors.red,
+          icon: state.isConnected ? Icons.cloud_done : Icons.cloud_off,
+        ),
+        const SizedBox(height: 8),
+        _buildConnectionStatus(
+          title: 'Status Slave',
+          value: state.slaveOnline == null
+              ? 'Tidak diketahui'
+              : state.slaveOnline!
+              ? 'Online'
+              : 'Offline',
+          color: state.slaveOnline == null
+              ? Colors.grey
+              : state.slaveOnline!
+              ? Colors.green
+              : Colors.red,
+          icon: state.slaveOnline == true
+              ? Icons.developer_board
+              : Icons.developer_board_off,
+        ),
+      ],
+    );
+  }
+
+  Widget _buildConnectionStatus({
+    required String title,
+    required String value,
+    required Color color,
+    required IconData icon,
+  }) {
     return Container(
+      width: double.infinity,
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: isConnected
-            ? Colors.green.withValues(alpha: 0.2)
-            : Colors.red.withValues(alpha: 0.2),
+        color: color.withValues(alpha: 0.2),
         borderRadius: BorderRadius.circular(10),
-        border: Border.all(
-          color: isConnected ? Colors.green : Colors.red,
-          width: 1,
-        ),
+        border: Border.all(color: color, width: 1),
       ),
       child: Row(
-        mainAxisAlignment: MainAxisAlignment.center,
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(
-            isConnected ? Icons.cloud_done : Icons.cloud_off,
-            color: isConnected ? Colors.green : Colors.red,
-            size: 20,
-          ),
+          Icon(icon, color: color, size: 20),
           const SizedBox(width: 8),
-          Text(
-            isConnected ? 'Connected to ESH System' : 'System Disconnected',
-            style: TextStyle(
-              color: isConnected ? Colors.green : Colors.red,
-              fontWeight: FontWeight.bold,
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: TextStyle(color: color, fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 2),
+                Text(value, style: TextStyle(color: color)),
+              ],
             ),
           ),
         ],
@@ -434,7 +544,13 @@ class _MonitoringViewState extends State<MonitoringView> {
     );
   }
 
-  Widget _buildMcbGauges(BuildContext context, McbDataCollection mcbData) {
+  Widget _buildMcbGauges(
+    BuildContext context,
+    McbDataCollection mcbData,
+    bool dataVisible,
+    bool sampleFresh,
+    bool upstreamAvailable,
+  ) {
     return Column(
       children: [
         SingleChildScrollView(
@@ -443,7 +559,15 @@ class _MonitoringViewState extends State<MonitoringView> {
             children: [
               SizedBox(
                 width: 350,
-                child: _buildMcbSection(context, 'MCB 1', mcbData.mcb1, 0),
+                child: _buildMcbSection(
+                  context,
+                  'MCB 1',
+                  mcbData.mcb1,
+                  0,
+                  dataVisible,
+                  sampleFresh,
+                  upstreamAvailable,
+                ),
               ),
             ],
           ),
@@ -458,41 +582,46 @@ class _MonitoringViewState extends State<MonitoringView> {
     String title,
     McbData mcbData,
     int mcbIndex,
+    bool dataVisible,
+    bool sampleFresh,
+    bool upstreamAvailable,
   ) {
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: _cardStyle(),
       child: Column(
         children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(title, style: _textStyle(bold: true, size: 18)),
-                  const SizedBox(height: 4),
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 8,
-                      vertical: 4,
+          Align(
+            alignment: Alignment.centerLeft,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(title, style: _textStyle(bold: true, size: 18)),
+                const SizedBox(height: 4),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 4,
+                  ),
+                  decoration: BoxDecoration(
+                    color: _getStatusColor(
+                      mcbData,
+                      sampleFresh,
+                      upstreamAvailable,
                     ),
-                    decoration: BoxDecoration(
-                      color: _getStatusColor(mcbData),
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: Text(
-                      _getStatusText(mcbData),
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 12,
-                        fontWeight: FontWeight.bold,
-                      ),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Text(
+                    _getStatusText(mcbData, sampleFresh, upstreamAvailable),
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 12,
+                      fontWeight: FontWeight.bold,
                     ),
                   ),
-                ],
-              ),
-            ],
+                ),
+              ],
+            ),
           ),
           const SizedBox(height: 16),
           Row(
@@ -504,6 +633,7 @@ class _MonitoringViewState extends State<MonitoringView> {
                   'V',
                   maxValue: 250,
                   color: Colors.blue,
+                  showValue: dataVisible,
                 ),
               ),
               const SizedBox(width: 16),
@@ -514,6 +644,7 @@ class _MonitoringViewState extends State<MonitoringView> {
                   'A',
                   maxValue: 20,
                   color: Colors.orange,
+                  showValue: dataVisible,
                 ),
               ),
             ],
@@ -528,6 +659,7 @@ class _MonitoringViewState extends State<MonitoringView> {
                   'W',
                   maxValue: 500,
                   color: Colors.green,
+                  showValue: dataVisible,
                 ),
               ),
               const SizedBox(width: 16),
@@ -538,6 +670,7 @@ class _MonitoringViewState extends State<MonitoringView> {
                   'kWh',
                   maxValue: 1000,
                   color: Colors.purple,
+                  showValue: dataVisible,
                 ),
               ),
             ],
@@ -547,14 +680,26 @@ class _MonitoringViewState extends State<MonitoringView> {
     );
   }
 
-  Color _getStatusColor(McbData mcbData) {
+  Color _getStatusColor(
+    McbData mcbData,
+    bool sampleFresh,
+    bool upstreamAvailable,
+  ) {
+    if (!upstreamAvailable) return Colors.grey;
     if (!mcbData.connected) return Colors.grey;
+    if (!sampleFresh) return Colors.amber;
     return Colors.green;
   }
 
-  String _getStatusText(McbData mcbData) {
-    if (!mcbData.connected) return 'Offline';
-    return 'Online';
+  String _getStatusText(
+    McbData mcbData,
+    bool sampleFresh,
+    bool upstreamAvailable,
+  ) {
+    if (!upstreamAvailable) return 'Status tidak tersedia';
+    if (!mcbData.connected) return 'Module Offline';
+    if (!sampleFresh) return 'Sampel Kedaluwarsa';
+    return 'Module Online';
   }
 
   Widget _buildGaugeCard(
@@ -563,8 +708,11 @@ class _MonitoringViewState extends State<MonitoringView> {
     String unit, {
     double maxValue = 100,
     Color color = Colors.cyan,
+    bool showValue = true,
   }) {
-    double percentage = (value / maxValue * 100).clamp(0, 100);
+    final percentage = showValue
+        ? (value / maxValue * 100).clamp(0, 100).toDouble()
+        : 0.0;
 
     return Container(
       padding: const EdgeInsets.all(12),
@@ -603,10 +751,11 @@ class _MonitoringViewState extends State<MonitoringView> {
                         mainAxisSize: MainAxisSize.min,
                         children: [
                           Text(
-                            value.toStringAsFixed(1),
+                            showValue ? value.toStringAsFixed(1) : '#',
                             style: _textStyle(bold: true, size: 14),
                           ),
-                          Text(unit, style: _textStyle(size: 10)),
+                          if (showValue)
+                            Text(unit, style: _textStyle(size: 10)),
                         ],
                       ),
                       angle: 90,

@@ -2,14 +2,19 @@ import 'dart:async';
 
 import 'package:esh/bloc/monitoring/monitoring_bloc.dart';
 import 'package:esh/bloc/monitoring/monitoring_event.dart';
+import 'package:esh/features/monitoring/domain/entities/mcb_data.dart';
 import 'package:esh/features/monitoring/domain/entities/mcb_data_collection.dart';
 import 'package:esh/features/monitoring/domain/entities/room_device_collection.dart';
 import 'package:esh/features/monitoring/domain/entities/room_device_state.dart';
+import 'package:esh/features/monitoring/domain/entities/sensor_data.dart';
 import 'package:esh/features/monitoring/domain/repositories/monitoring_repository.dart';
 import 'package:esh/features/monitoring/domain/usecases/control_room_device_use_case.dart';
+import 'package:esh/features/monitoring/domain/usecases/estimate_emission_use_case.dart';
+import 'package:esh/features/monitoring/domain/usecases/estimate_energy_cost_use_case.dart';
 import 'package:esh/features/monitoring/domain/usecases/watch_connection_status_use_case.dart';
 import 'package:esh/features/monitoring/domain/usecases/watch_monitoring_data_use_case.dart';
 import 'package:esh/features/monitoring/domain/usecases/watch_room_devices_use_case.dart';
+import 'package:esh/features/monitoring/domain/usecases/watch_slave_availability_use_case.dart';
 import 'package:esh/features/monitoring/presentation/models/device_control_view_state.dart';
 import 'package:esh/screen/control.dart';
 import 'package:esh/screen/monitoring.dart';
@@ -39,6 +44,9 @@ class FakeMonitoringRepository implements MonitoringRepository {
   Stream<bool> getConnectionStatus() => Stream.value(true);
 
   @override
+  Stream<bool?> getSlaveOnlineStream() => Stream.value(true);
+
+  @override
   Stream<McbDataCollection> getMonitoringDataStream() => const Stream.empty();
 
   @override
@@ -47,13 +55,47 @@ class FakeMonitoringRepository implements MonitoringRepository {
   Future<void> close() => roomsController.close();
 }
 
+const nowEpochSeconds = 2000000000;
+
+class InertTimer implements Timer {
+  bool _isActive = true;
+
+  @override
+  bool get isActive => _isActive;
+
+  @override
+  int get tick => 0;
+
+  @override
+  void cancel() => _isActive = false;
+}
+
 MonitoringBloc createMonitoringBloc(FakeMonitoringRepository repository) {
   return MonitoringBloc(
     watchMonitoringData: WatchMonitoringDataUseCase(repository: repository),
     watchConnectionStatus: WatchConnectionStatusUseCase(repository: repository),
     watchRoomDevices: WatchRoomDevicesUseCase(repository: repository),
+    watchSlaveAvailability: WatchSlaveAvailabilityUseCase(
+      repository: repository,
+    ),
     controlRoomDevice: ControlRoomDeviceUseCase(repository: repository),
+    now: () => DateTime.fromMillisecondsSinceEpoch(nowEpochSeconds * 1000),
+    pendingCommandTimeout: const Duration(milliseconds: 100),
+    freshnessTimerFactory: (_, _) => InertTimer(),
   );
+}
+
+void enableControl(MonitoringBloc bloc) {
+  bloc.add(
+    DataUpdated(
+      McbDataCollection(
+        mcb1: McbDataCollection.empty().mcb1,
+        heartbeatEpochSeconds: nowEpochSeconds,
+      ),
+    ),
+  );
+  bloc.add(ConnectionStatusChanged(true));
+  bloc.add(SlaveAvailabilityChanged(true));
 }
 
 GoRouter createControlRouter(MonitoringBloc bloc) {
@@ -64,6 +106,25 @@ GoRouter createControlRouter(MonitoringBloc bloc) {
         path: '/control',
         builder: (context, state) =>
             BlocProvider.value(value: bloc, child: const ControlPage()),
+      ),
+    ],
+  );
+}
+
+GoRouter createMonitoringRouter(MonitoringBloc bloc) {
+  return GoRouter(
+    routes: [
+      GoRoute(
+        path: '/',
+        builder: (context, state) => BlocProvider.value(
+          value: bloc,
+          child: const MonitoringPage(
+            estimateEnergyCost: EstimateEnergyCostUseCase(ratePerKwh: 1440.70),
+            estimateEmission: EstimateEmissionUseCase(
+              emissionFactorKgCo2PerKwh: 0.85,
+            ),
+          ),
+        ),
       ),
     ],
   );
@@ -87,6 +148,18 @@ RoomDeviceCollection dapurLampu({required bool isOn, required int brightness}) {
     const DeviceAddress(roomKey: 'dapur', deviceKey: 'lampu'),
     RoomDeviceValue(isOn: isOn, brightness: brightness),
   );
+}
+
+RoomDeviceCollection controlDevices() {
+  return terasDevices()
+      .set(
+        const DeviceAddress(roomKey: 'dapur', deviceKey: 'lampu'),
+        const RoomDeviceValue(isOn: true, brightness: 40),
+      )
+      .set(
+        const DeviceAddress(roomKey: 'dapur', deviceKey: 'blower'),
+        const RoomDeviceValue(isOn: false),
+      );
 }
 
 Future<void> selectDapur(WidgetTester tester) async {
@@ -248,7 +321,7 @@ void main() {
 
     await tester.pumpWidget(MaterialApp.router(routerConfig: router));
     bloc.add(DeviceStateUpdated(terasDevices()));
-    bloc.add(ConnectionStatusChanged(true));
+    enableControl(bloc);
     await tester.pump();
 
     bloc.add(
@@ -288,6 +361,48 @@ void main() {
     await tester.pump();
   });
 
+  testWidgets(
+    'Slave offline disables Slave controls but leaves Teras enabled',
+    (tester) async {
+      final repository = FakeMonitoringRepository();
+      final bloc = createMonitoringBloc(repository);
+      final router = createControlRouter(bloc);
+      addTearDown(() async {
+        router.dispose();
+        await bloc.close();
+        await repository.close();
+      });
+
+      await tester.pumpWidget(MaterialApp.router(routerConfig: router));
+      bloc.add(DeviceStateUpdated(controlDevices()));
+      enableControl(bloc);
+      bloc.add(SlaveAvailabilityChanged(false));
+      await tester.pump();
+
+      expect(find.byKey(const Key('slave-unavailable-banner')), findsOneWidget);
+      var terasButtons = tester
+          .widgetList<ElevatedButton>(
+            find.widgetWithText(ElevatedButton, 'Nyalakan'),
+          )
+          .toList();
+      expect(terasButtons, hasLength(2));
+      expect(terasButtons.every((button) => button.onPressed != null), isTrue);
+
+      await selectDapur(tester);
+
+      final dimmerOn = tester.widget<ElevatedButton>(
+        find.widgetWithText(ElevatedButton, 'Nyala'),
+      );
+      final blowerOn = tester.widget<ElevatedButton>(
+        find.widgetWithText(ElevatedButton, 'Nyalakan'),
+      );
+      expect(dimmerOn.onPressed, isNull);
+      expect(blowerOn.onPressed, isNull);
+      expect(find.text('Status belum tersedia'), findsNWidgets(2));
+      expect(find.text('40%'), findsNothing);
+    },
+  );
+
   testWidgets('failed known device keeps controls enabled', (tester) async {
     final repository = FakeMonitoringRepository();
     final bloc = createMonitoringBloc(repository);
@@ -300,6 +415,7 @@ void main() {
 
     await tester.pumpWidget(MaterialApp.router(routerConfig: router));
     bloc.add(DeviceStateUpdated(terasDevices()));
+    enableControl(bloc);
     await tester.pump();
     bloc.add(
       CommandFailed(
@@ -333,7 +449,7 @@ void main() {
 
     await tester.pumpWidget(MaterialApp.router(routerConfig: router));
     bloc.add(DeviceStateUpdated(dapurLampu(isOn: true, brightness: 35)));
-    bloc.add(ConnectionStatusChanged(true));
+    enableControl(bloc);
     await tester.pump();
     await selectDapur(tester);
 
@@ -365,7 +481,7 @@ void main() {
 
     await tester.pumpWidget(MaterialApp.router(routerConfig: router));
     bloc.add(DeviceStateUpdated(dapurLampu(isOn: false, brightness: 0)));
-    bloc.add(ConnectionStatusChanged(true));
+    enableControl(bloc);
     await tester.pump();
     await selectDapur(tester);
 
@@ -383,5 +499,80 @@ void main() {
     expect(repository.lastBrightness, 1);
     bloc.add(DeviceStateUpdated(dapurLampu(isOn: true, brightness: 1)));
     await tester.pump();
+  });
+
+  testWidgets('monitoring masks stale power data with hash placeholders', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(800, 1200));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final repository = FakeMonitoringRepository();
+    final bloc = createMonitoringBloc(repository);
+    final router = createMonitoringRouter(bloc);
+    addTearDown(() async {
+      router.dispose();
+      await bloc.close();
+      await repository.close();
+    });
+
+    await tester.pumpWidget(MaterialApp.router(routerConfig: router));
+    bloc.add(
+      DataUpdated(
+        const McbDataCollection(
+          heartbeatEpochSeconds: nowEpochSeconds,
+          mcb1: McbData(
+            connected: true,
+            voltage: 220,
+            current: 1,
+            power: 220,
+            energy: 10,
+            sampledAtEpochSeconds: nowEpochSeconds - 60,
+          ),
+          sensorData: SensorData(
+            temperature: 28,
+            humidity: 60,
+            connected: true,
+            sampledAtEpochSeconds: nowEpochSeconds - 60,
+          ),
+        ),
+      ),
+    );
+    bloc.add(ConnectionStatusChanged(true));
+    await tester.pump();
+
+    expect(find.text('Status ESH'), findsOneWidget);
+    expect(find.text('Koneksi Firebase'), findsOneWidget);
+    expect(find.text('Sampel Kedaluwarsa'), findsOneWidget);
+    expect(find.text('#'), findsNWidgets(6));
+    expect(find.text('220.0'), findsNothing);
+    expect(find.text('Rp 14407'), findsNothing);
+  });
+
+  testWidgets('monitoring status fits 320px at 2x text scale', (tester) async {
+    tester.view.physicalSize = const Size(640, 1280);
+    tester.view.devicePixelRatio = 2;
+    tester.binding.platformDispatcher.textScaleFactorTestValue = 2;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+      tester.binding.platformDispatcher.clearTextScaleFactorTestValue();
+    });
+    final repository = FakeMonitoringRepository();
+    final bloc = createMonitoringBloc(repository);
+    final router = createMonitoringRouter(bloc);
+    addTearDown(() async {
+      router.dispose();
+      await bloc.close();
+      await repository.close();
+    });
+
+    await tester.pumpWidget(MaterialApp.router(routerConfig: router));
+    enableControl(bloc);
+    await tester.pump();
+    bloc.add(ConnectionStatusChanged(false));
+    await tester.pump();
+
+    expect(find.text('Online (stale)'), findsOneWidget);
+    expect(tester.takeException(), isNull);
   });
 }

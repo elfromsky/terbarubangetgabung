@@ -12,11 +12,13 @@ void main() {
       'timestamp': Timestamp(1, 0),
       'power': {'energy': '4.25'},
       'environment': {'humidity': 60},
+      'derived': {'estimatedCost': 1000},
     }, 'canonical');
 
     expect(dto.timestamp, Timestamp(1, 0));
     expect(dto.power['energy'], '4.25');
     expect(dto.environment['humidity'], 60);
+    expect(dto.derived!['estimatedCost'], 1000);
   });
 
   test('canonical DTO entity mapper preserves timestamp lastUpdate', () {

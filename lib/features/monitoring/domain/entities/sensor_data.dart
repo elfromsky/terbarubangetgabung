@@ -2,11 +2,13 @@ class SensorData {
   final double temperature;
   final double humidity;
   final bool connected;
+  final int? sampledAtEpochSeconds;
 
   const SensorData({
     required this.temperature,
     required this.humidity,
     this.connected = false,
+    this.sampledAtEpochSeconds,
   });
 
   factory SensorData.empty() =>
@@ -36,11 +38,16 @@ class SensorData {
         c9 * t * t * h * h;
   }
 
-  String get comfortLevel {
-    if (temperature < 18) return 'Dingin';
-    if (temperature > 30) return 'Panas';
-    if (humidity < 30) return 'Kering';
-    if (humidity > 70) return 'Lembap';
-    return 'Nyaman';
+  String get temperatureCategory {
+    if (temperature <= 25.7) return 'Dingin';
+    if (temperature <= 28.6) return 'Sejuk';
+    if (temperature < 31.5) return 'Hangat';
+    return 'Panas';
+  }
+
+  String get humidityCategory {
+    if (humidity <= 60.25) return 'Kering';
+    if (humidity < 86.62) return 'Normal';
+    return 'Lembap';
   }
 }

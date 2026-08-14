@@ -7,9 +7,13 @@ DeviceControlViewState mapDeviceControlViewState({
   required DeviceAddress address,
   required bool isPending,
   required String? errorMessage,
+  bool isAvailable = true,
 }) {
-  final value = visibleDevices.find(address);
-  final phase = errorMessage != null
+  final value = isAvailable ? visibleDevices.find(address) : null;
+  final visibleError = isAvailable ? errorMessage : null;
+  final phase = !isAvailable
+      ? DeviceControlPhase.unknown
+      : visibleError != null
       ? DeviceControlPhase.failed
       : isPending
       ? DeviceControlPhase.pending
@@ -22,7 +26,7 @@ DeviceControlViewState mapDeviceControlViewState({
   return DeviceControlViewState(
     phase: phase,
     value: value,
-    errorMessage: errorMessage,
+    errorMessage: visibleError,
     isPending: isPending,
   );
 }

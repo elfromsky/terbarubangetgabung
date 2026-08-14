@@ -12,6 +12,7 @@ import 'package:esh/features/monitoring/domain/usecases/estimate_energy_cost_use
 import 'package:esh/features/monitoring/domain/usecases/watch_connection_status_use_case.dart';
 import 'package:esh/features/monitoring/domain/usecases/watch_monitoring_data_use_case.dart';
 import 'package:esh/features/monitoring/domain/usecases/watch_room_devices_use_case.dart';
+import 'package:esh/features/monitoring/domain/usecases/watch_slave_availability_use_case.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 class FakeHistoryRepository implements HistoryRepository {
@@ -30,16 +31,21 @@ class FakeHistoryRepository implements HistoryRepository {
     this.limit = limit;
     return const [];
   }
+
+  @override
+  Future<void> saveSensorLog(McbDataCollection collection) async {}
 }
 
 class FakeMonitoringRepository implements MonitoringRepository {
   final monitoringController = StreamController<McbDataCollection>.broadcast();
   final connectionController = StreamController<bool>.broadcast();
   final roomController = StreamController<RoomDeviceCollection>.broadcast();
+  final slaveOnlineController = StreamController<bool?>.broadcast();
   late final Stream<McbDataCollection> monitoringStream =
       monitoringController.stream;
   late final Stream<bool> connectionStream = connectionController.stream;
   late final Stream<RoomDeviceCollection> roomStream = roomController.stream;
+  late final Stream<bool?> slaveOnlineStream = slaveOnlineController.stream;
   List<Object>? command;
 
   @override
@@ -62,10 +68,14 @@ class FakeMonitoringRepository implements MonitoringRepository {
   @override
   Stream<RoomDeviceCollection> getRoomDevicesStream() => roomStream;
 
+  @override
+  Stream<bool?> getSlaveOnlineStream() => slaveOnlineStream;
+
   Future<void> close() async {
     await monitoringController.close();
     await connectionController.close();
     await roomController.close();
+    await slaveOnlineController.close();
   }
 }
 
@@ -86,10 +96,14 @@ void main() {
       repository: monitoringRepository,
     );
     final rooms = WatchRoomDevicesUseCase(repository: monitoringRepository);
+    final slaveAvailability = WatchSlaveAvailabilityUseCase(
+      repository: monitoringRepository,
+    );
 
     expect(telemetry(), same(monitoringRepository.monitoringStream));
     expect(connection(), same(monitoringRepository.connectionStream));
     expect(rooms(), same(monitoringRepository.roomStream));
+    expect(slaveAvailability(), same(monitoringRepository.slaveOnlineStream));
   });
 
   test('control room device use case forwards canonical parameters', () async {

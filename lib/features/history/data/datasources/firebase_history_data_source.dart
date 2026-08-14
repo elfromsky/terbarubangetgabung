@@ -14,12 +14,23 @@ abstract interface class HistoryDataSource {
     required DateTime endDate,
     int limit = 1000,
   });
+
+  Future<void> saveSensorLog(Map<String, dynamic> data);
 }
 
 class FirebaseHistoryDataSource implements HistoryDataSource {
   final FirebaseFirestore firestore;
 
   FirebaseHistoryDataSource({required this.firestore});
+
+  @override
+  Future<void> saveSensorLog(Map<String, dynamic> data) async {
+    try {
+      await firestore.collection(canonicalHistoryCollection).add(data);
+    } catch (error) {
+      throw Exception('Failed to save sensor log: $error');
+    }
+  }
 
   @override
   Future<List<CanonicalHistoryDto>> getHistoricalData({

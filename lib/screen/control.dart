@@ -5,7 +5,6 @@ import 'package:esh/widgets/selector_page.dart';
 import 'package:esh/bloc/monitoring/monitoring_bloc.dart';
 import 'package:esh/bloc/monitoring/monitoring_event.dart';
 import 'package:esh/bloc/monitoring/monitoring_state.dart';
-import 'package:esh/features/monitoring/domain/entities/room_device_collection.dart';
 import 'package:esh/features/monitoring/domain/entities/room_device_state.dart';
 import 'package:esh/features/monitoring/presentation/mappers/device_control_view_mapper.dart';
 import 'package:esh/features/monitoring/presentation/models/device_control_view_state.dart';
@@ -92,25 +91,33 @@ class _ControlPageState extends State<ControlPage> {
                     padding: const EdgeInsets.all(16.0),
                     child: Column(
                       children: [
-                        if (!state.isConnected)
+                        if (!state.canControl)
                           Container(
                             width: double.infinity,
                             margin: const EdgeInsets.only(bottom: 12),
                             padding: const EdgeInsets.all(12),
                             color: Colors.red.withValues(alpha: 0.2),
-                            child: const Text(
-                              'Firebase terputus. Status dapat tidak terbaru.',
-                              style: TextStyle(color: Colors.white),
+                            child: Text(
+                              state.controlDisabledReason!,
+                              style: const TextStyle(color: Colors.white),
+                            ),
+                          ),
+                        if (state.slaveOnline != true)
+                          Container(
+                            key: const Key('slave-unavailable-banner'),
+                            width: double.infinity,
+                            margin: const EdgeInsets.only(bottom: 12),
+                            padding: const EdgeInsets.all(12),
+                            color: Colors.red.withValues(alpha: 0.2),
+                            child: Text(
+                              state.slaveOnline == null
+                                  ? 'Status Slave belum tersedia. Kontrol Lorong, Kamar 1, Kamar 2, dan Dapur dinonaktifkan.${state.canControl ? ' Kontrol Teras tetap tersedia.' : ''}'
+                                  : 'Slave tidak tersedia. Kontrol Lorong, Kamar 1, Kamar 2, dan Dapur dinonaktifkan.${state.canControl ? ' Kontrol Teras tetap tersedia.' : ''}',
+                              style: const TextStyle(color: Colors.white),
                             ),
                           ),
                         if (roomConfig != null)
-                          _buildRoomControlCard(
-                            roomConfig,
-                            devices,
-                            state.deviceData,
-                            state.pendingDevices,
-                            state.commandErrors,
-                          ),
+                          _buildRoomControlCard(roomConfig, devices, state),
                       ],
                     ),
                   );
@@ -126,9 +133,7 @@ class _ControlPageState extends State<ControlPage> {
   Widget _buildRoomControlCard(
     RoomDeviceConfig roomConfig,
     List<DeviceConfig> devices,
-    RoomDeviceCollection deviceData,
-    Set<DeviceAddress> pendingDevices,
-    Map<DeviceAddress, String> commandErrors,
+    MonitoringLoaded state,
   ) {
     return Column(
       children: [
@@ -159,10 +164,11 @@ class _ControlPageState extends State<ControlPage> {
                   deviceKey: device.deviceKey,
                 );
                 final viewState = mapDeviceControlViewState(
-                  visibleDevices: deviceData,
+                  visibleDevices: state.deviceData,
                   address: address,
-                  isPending: pendingDevices.contains(address),
-                  errorMessage: commandErrors[address],
+                  isPending: state.pendingDevices.contains(address),
+                  errorMessage: state.commandErrors[address],
+                  isAvailable: state.canShowDeviceState(address),
                 );
                 return _buildStatusItem(
                   device.displayName,
@@ -203,10 +209,11 @@ class _ControlPageState extends State<ControlPage> {
                   deviceKey: device.deviceKey,
                 );
                 final viewState = mapDeviceControlViewState(
-                  visibleDevices: deviceData,
+                  visibleDevices: state.deviceData,
                   address: address,
-                  isPending: pendingDevices.contains(address),
-                  errorMessage: commandErrors[address],
+                  isPending: state.pendingDevices.contains(address),
+                  errorMessage: state.commandErrors[address],
+                  isAvailable: state.canShowDeviceState(address),
                 );
                 return _ControlActionWidget(
                   key: ValueKey('${roomConfig.roomKey}/${device.deviceKey}'),
@@ -216,6 +223,7 @@ class _ControlPageState extends State<ControlPage> {
                   deviceKey: device.deviceKey,
                   supportsBrightness: device.supportsBrightness,
                   viewState: viewState,
+                  canControl: state.canControlDevice(address),
                 );
               }),
             ],
@@ -333,6 +341,7 @@ class _ControlActionWidget extends StatefulWidget {
   final String deviceKey;
   final bool supportsBrightness;
   final DeviceControlViewState viewState;
+  final bool canControl;
 
   const _ControlActionWidget({
     super.key,
@@ -342,6 +351,7 @@ class _ControlActionWidget extends StatefulWidget {
     required this.deviceKey,
     required this.supportsBrightness,
     required this.viewState,
+    required this.canControl,
   });
 
   @override
@@ -374,7 +384,8 @@ class _ControlActionWidgetState extends State<_ControlActionWidget> {
     }
   }
 
-  bool get _canInteract => widget.viewState.controlsEnabled;
+  bool get _canInteract =>
+      widget.canControl && widget.viewState.controlsEnabled;
 
   void _sendControlCommand(bool turnOn, double brightnessVal) {
     if (!_canInteract) return;

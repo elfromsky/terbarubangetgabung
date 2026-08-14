@@ -37,15 +37,27 @@ class FakeRepository implements MonitoringRepository, HistoryRepository {
 
   @override
   Stream<RoomDeviceCollection> getRoomDevicesStream() => const Stream.empty();
+
+  @override
+  Stream<bool?> getSlaveOnlineStream() => const Stream.empty();
+
+  @override
+  Future<void> saveSensorLog(McbDataCollection collection) async {}
 }
 
 void main() {
+  test('default electricity tariff matches PRD', () {
+    expect(AppDependencies.defaultElectricityRate, 1440.70);
+  });
+
   test('dependencies provide repository contracts to both BLoCs', () async {
     final repository = FakeRepository();
     final dependencies = AppDependencies(
       monitoringRepository: repository,
       historyRepository: repository,
-      estimateEnergyCost: const EstimateEnergyCostUseCase(ratePerKwh: 1699.53),
+      estimateEnergyCost: const EstimateEnergyCostUseCase(
+        ratePerKwh: AppDependencies.defaultElectricityRate,
+      ),
       estimateEmission: const EstimateEmissionUseCase(
         emissionFactorKgCo2PerKwh: 0.85,
       ),

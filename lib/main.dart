@@ -5,10 +5,21 @@ import 'package:esh/bloc/monitoring/monitoring_bloc.dart';
 import 'package:esh/bloc/monitoring/monitoring_event.dart';
 import 'package:esh/firebase_options.dart';
 import 'package:esh/routes/router.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
-  
+
+class UntrustedDeviceException implements Exception {
+  final String uid;
+
+  const UntrustedDeviceException(this.uid);
+}
+
+bool hasTrustedDeviceClaim(Map<String, dynamic>? claims) {
+  return claims?['owner'] == true || claims?['controller'] == true;
+}
+
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
   Bloc.observer = AppBlocObserver();
@@ -31,17 +42,38 @@ class _FirebaseBootstrapState extends State<FirebaseBootstrap> {
     _initialization = _initializeFirebase();
   }
 
-  Future<void> _initializeFirebase() async {
+  Future<void> _initializeFirebase({bool forceClaimRefresh = false}) async {
     if (Firebase.apps.isEmpty) {
       await Firebase.initializeApp(
         options: DefaultFirebaseOptions.currentPlatform,
       );
     }
+
+    final auth = FirebaseAuth.instance;
+    if (auth.currentUser == null) {
+      await auth.signInAnonymously();
+    }
+
+    final user = auth.currentUser!;
+    IdTokenResult token;
+    try {
+      token = await user.getIdTokenResult(forceClaimRefresh);
+    } on FirebaseAuthException catch (error) {
+      if (!forceClaimRefresh && error.code == 'network-request-failed') {
+        // Server-side rules remain the authority. Cached installations may
+        // open the offline shell, but monitoring and control stay unavailable.
+        return;
+      }
+      rethrow;
+    }
+    if (!hasTrustedDeviceClaim(token.claims)) {
+      throw UntrustedDeviceException(user.uid);
+    }
   }
 
   void _retry() {
     setState(() {
-      _initialization = _initializeFirebase();
+      _initialization = _initializeFirebase(forceClaimRefresh: true);
     });
   }
 
@@ -59,6 +91,8 @@ class _FirebaseBootstrapState extends State<FirebaseBootstrap> {
 
         if (snapshot.hasError) {
           debugPrint('Firebase initialization failed: ${snapshot.error}');
+          final error = snapshot.error;
+          final isUntrustedDevice = error is UntrustedDeviceException;
           return MaterialApp(
             debugShowCheckedModeBanner: false,
             home: Scaffold(
@@ -68,12 +102,28 @@ class _FirebaseBootstrapState extends State<FirebaseBootstrap> {
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      const Icon(Icons.cloud_off, size: 56),
+                      Icon(
+                        isUntrustedDevice
+                            ? Icons.phonelink_lock
+                            : Icons.cloud_off,
+                        size: 56,
+                      ),
                       const SizedBox(height: 16),
-                      const Text(
-                        'Firebase gagal diinisialisasi',
+                      Text(
+                        isUntrustedDevice
+                            ? 'Perangkat belum terdaftar'
+                            : 'Firebase gagal diinisialisasi',
                         textAlign: TextAlign.center,
                       ),
+                      if (isUntrustedDevice) ...[
+                        const SizedBox(height: 8),
+                        const Text(
+                          'Daftarkan UID berikut sebagai owner, lalu coba lagi.',
+                          textAlign: TextAlign.center,
+                        ),
+                        const SizedBox(height: 8),
+                        SelectableText(error.uid, textAlign: TextAlign.center),
+                      ],
                       const SizedBox(height: 16),
                       ElevatedButton(
                         onPressed: _retry,

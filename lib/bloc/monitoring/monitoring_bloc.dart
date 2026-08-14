@@ -4,37 +4,67 @@ import 'package:esh/features/monitoring/domain/entities/mcb_data_collection.dart
 import 'package:esh/features/monitoring/domain/entities/room_device_state.dart';
 import 'package:esh/features/monitoring/domain/usecases/control_room_device_use_case.dart';
 import 'package:esh/features/monitoring/domain/usecases/watch_connection_status_use_case.dart';
+import 'package:esh/features/history/domain/usecases/save_sensor_log_use_case.dart';
 import 'package:esh/features/monitoring/domain/usecases/watch_monitoring_data_use_case.dart';
 import 'package:esh/features/monitoring/domain/usecases/watch_room_devices_use_case.dart';
+import 'package:esh/features/monitoring/domain/usecases/watch_slave_availability_use_case.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'monitoring_event.dart';
 import 'monitoring_state.dart';
 
 class MonitoringBloc extends Bloc<MonitoringEvent, MonitoringState> {
-  static const pendingCommandTimeout = Duration(seconds: 5);
+  static const defaultPendingCommandTimeout = Duration(seconds: 12);
+  static const eshHeartbeatLifetime = Duration(seconds: 60);
 
   final WatchMonitoringDataUseCase watchMonitoringData;
   final WatchConnectionStatusUseCase watchConnectionStatus;
   final WatchRoomDevicesUseCase watchRoomDevices;
+  final WatchSlaveAvailabilityUseCase watchSlaveAvailability;
   final ControlRoomDeviceUseCase controlRoomDevice;
+  final SaveSensorLogUseCase? saveSensorLog;
+  final Duration pendingCommandTimeout;
+  final DateTime Function() _now;
+  final Timer Function(Duration, void Function()) _freshnessTimerFactory;
   StreamSubscription? _dataSubscription;
   StreamSubscription? _connectionSubscription;
   StreamSubscription? _deviceDataSubscription;
+  StreamSubscription? _slaveAvailabilitySubscription;
   final Map<DeviceAddress, Timer> _pendingTimers = {};
   final Map<DeviceAddress, int> _commandGenerations = {};
+  Timer? _freshnessExpiryTimer;
+  int _freshnessGeneration = 0;
   int _nextCommandGeneration = 0;
   bool _monitoringActive = false;
+  bool _monitoringStartInProgress = false;
+
+  // Sensor-log writer throttling.
+  static const sensorLogMinInterval = Duration(minutes: 5);
+  static const sensorLogSignificantChange = 0.01; // kWh
+  DateTime? _lastSensorLogTimestamp;
+  McbDataCollection? _lastSensorLogCollection;
 
   MonitoringBloc({
     required this.watchMonitoringData,
     required this.watchConnectionStatus,
     required this.watchRoomDevices,
+    required this.watchSlaveAvailability,
     required this.controlRoomDevice,
-  }) : super(MonitoringInitial()) {
+    this.saveSensorLog,
+    this.pendingCommandTimeout = defaultPendingCommandTimeout,
+    DateTime Function()? now,
+    Timer Function(Duration, void Function())? freshnessTimerFactory,
+  }) : _now = now ?? DateTime.now,
+       _freshnessTimerFactory =
+           freshnessTimerFactory ??
+           ((duration, callback) => Timer(duration, callback)),
+       super(MonitoringInitial()) {
     on<StartMonitoring>(_onStartMonitoring);
     on<StopMonitoring>(_onStopMonitoring);
     on<DataUpdated>(_onDataUpdated);
     on<ConnectionStatusChanged>(_onConnectionStatusChanged);
+    on<SlaveAvailabilityChanged>(_onSlaveAvailabilityChanged);
+    on<MonitoringFreshnessExpired>(_onMonitoringFreshnessExpired);
     on<ControlRoomDevice>(_onControlRoomDevice);
     on<DeviceStateUpdated>(_onDeviceStateUpdated);
     on<ClearPendingCommand>(_onClearPendingCommand);
@@ -53,14 +83,13 @@ class MonitoringBloc extends Bloc<MonitoringEvent, MonitoringState> {
       roomKey: event.roomKey,
       deviceKey: event.deviceKey,
     );
-    if (currentState.pendingDevices.contains(address)) return;
-
-    if (!currentState.isConnected) {
+    if (!currentState.canControlDevice(address)) {
       final errors = Map<DeviceAddress, String>.from(currentState.commandErrors)
-        ..[address] = 'Firebase terputus. Perintah tidak dikirim';
+        ..[address] = currentState.controlDisabledReasonFor(address)!;
       emit(currentState.copyWith(commandErrors: errors));
       return;
     }
+    if (currentState.pendingDevices.contains(address)) return;
 
     var normalizedBrightness = event.brightness.toInt().clamp(0, 100);
     if (event.supportsBrightness && event.isOn && normalizedBrightness == 0) {
@@ -94,7 +123,13 @@ class MonitoringBloc extends Bloc<MonitoringEvent, MonitoringState> {
       (entry) => currentState.deviceData.find(entry.key) == entry.value,
     )) {
       final errors = Map<DeviceAddress, String>.from(currentState.commandErrors)
-        ..remove(address);
+        ..removeWhere((key, _) => desiredByAddress.containsKey(key));
+      final generations = <DeviceAddress, int>{};
+      for (final target in desiredByAddress.keys) {
+        final generation = ++_nextCommandGeneration;
+        _commandGenerations[target] = generation;
+        generations[target] = generation;
+      }
       emit(currentState.copyWith(commandErrors: errors));
       try {
         await controlRoomDevice(
@@ -104,9 +139,18 @@ class MonitoringBloc extends Bloc<MonitoringEvent, MonitoringState> {
           brightness: normalizedBrightness,
           supportsBrightness: event.supportsBrightness,
         );
+        for (final entry in generations.entries) {
+          if (_commandGenerations[entry.key] == entry.value) {
+            _commandGenerations.remove(entry.key);
+          }
+        }
       } catch (_) {
         if (!isClosed) {
-          add(CommandFailed(address, 'Perintah gagal dikirim'));
+          for (final entry in generations.entries) {
+            add(
+              CommandFailed(entry.key, 'Perintah gagal dikirim', entry.value),
+            );
+          }
         }
       }
       return;
@@ -177,7 +221,8 @@ class MonitoringBloc extends Bloc<MonitoringEvent, MonitoringState> {
     StartMonitoring event,
     Emitter<MonitoringState> emit,
   ) async {
-    if (_monitoringActive) return;
+    if (_monitoringActive || _monitoringStartInProgress) return;
+    _monitoringStartInProgress = true;
     emit(MonitoringLoading());
 
     try {
@@ -204,10 +249,18 @@ class MonitoringBloc extends Bloc<MonitoringEvent, MonitoringState> {
           }
         },
       );
+      _slaveAvailabilitySubscription = watchSlaveAvailability().listen(
+        (slaveOnline) => add(SlaveAvailabilityChanged(slaveOnline)),
+        onError: (Object error) {
+          if (!isClosed) add(SlaveAvailabilityChanged(null));
+        },
+      );
       _monitoringActive = true;
     } catch (_) {
       _monitoringActive = false;
       emit(MonitoringError('Monitoring gagal dimulai'));
+    } finally {
+      _monitoringStartInProgress = false;
     }
   }
 
@@ -217,13 +270,15 @@ class MonitoringBloc extends Bloc<MonitoringEvent, MonitoringState> {
   ) async {
     await _cancelSubscriptions();
     _cancelPendingTimers();
+    _cancelFreshnessExpiry();
     emit(MonitoringInitial());
   }
 
   void _onDataUpdated(DataUpdated event, Emitter<MonitoringState> emit) {
     final currentState = state;
     if (currentState is MonitoringLoaded) {
-      emit(currentState.copyWith(mcbData: event.mcbData));
+      final nextState = currentState.copyWith(mcbData: event.mcbData);
+      emit(nextState.isConnected ? _recomputeFreshness(nextState) : nextState);
     } else {
       emit(MonitoringLoaded(mcbData: event.mcbData, isConnected: false));
     }
@@ -235,15 +290,141 @@ class MonitoringBloc extends Bloc<MonitoringEvent, MonitoringState> {
   ) {
     final currentState = state;
     if (currentState is MonitoringLoaded) {
-      emit(currentState.copyWith(isConnected: event.isConnected));
+      if (!event.isConnected) {
+        _cancelFreshnessExpiry();
+        emit(currentState.copyWith(isConnected: false));
+        return;
+      }
+      emit(_recomputeFreshness(currentState.copyWith(isConnected: true)));
     } else {
-      emit(
-        MonitoringLoaded(
-          mcbData: McbDataCollection.empty(),
-          isConnected: event.isConnected,
-        ),
+      final nextState = MonitoringLoaded(
+        mcbData: McbDataCollection.empty(),
+        isConnected: event.isConnected,
+      );
+      emit(event.isConnected ? _recomputeFreshness(nextState) : nextState);
+    }
+  }
+
+  void _onMonitoringFreshnessExpired(
+    MonitoringFreshnessExpired event,
+    Emitter<MonitoringState> emit,
+  ) {
+    final currentState = state;
+    if (currentState is! MonitoringLoaded ||
+        !currentState.isConnected ||
+        event.generation != _freshnessGeneration) {
+      return;
+    }
+    emit(_recomputeFreshness(currentState));
+  }
+
+  void _onSlaveAvailabilityChanged(
+    SlaveAvailabilityChanged event,
+    Emitter<MonitoringState> emit,
+  ) {
+    final currentState = state;
+    if (currentState is MonitoringLoaded) {
+      emit(currentState.copyWith(slaveOnline: event.slaveOnline));
+      return;
+    }
+
+    emit(
+      MonitoringLoaded(
+        mcbData: McbDataCollection.empty(),
+        isConnected: false,
+        slaveOnline: event.slaveOnline,
+      ),
+    );
+  }
+
+  MonitoringLoaded _recomputeFreshness(MonitoringLoaded state) {
+    _cancelFreshnessExpiry();
+    final now = _now();
+    final heartbeat = state.mcbData.heartbeatEpochSeconds;
+    final eshStatus = _eshStatusFor(heartbeat, now);
+    final powerSampleFresh = _isFreshEpochSeconds(
+      state.mcbData.mcb1.sampledAtEpochSeconds,
+      now,
+    );
+    final environmentSampleFresh = _isFreshEpochSeconds(
+      state.mcbData.sensorData.sampledAtEpochSeconds,
+      now,
+    );
+
+    final freshTimestamps = <int>[
+      if (eshStatus == EshSystemStatus.online) heartbeat!,
+      if (state.mcbData.mcb1.connected && powerSampleFresh)
+        state.mcbData.mcb1.sampledAtEpochSeconds!,
+      if (state.mcbData.sensorData.connected && environmentSampleFresh)
+        state.mcbData.sensorData.sampledAtEpochSeconds!,
+    ];
+    if (freshTimestamps.isNotEmpty) {
+      final earliestExpiryEpochSeconds =
+          freshTimestamps.reduce(
+            (first, second) => first < second ? first : second,
+          ) +
+          eshHeartbeatLifetime.inSeconds;
+      final expiry = DateTime.fromMillisecondsSinceEpoch(
+        earliestExpiryEpochSeconds * 1000,
+      );
+      final generation = _freshnessGeneration;
+      _freshnessExpiryTimer = _freshnessTimerFactory(
+        expiry.difference(now),
+        () {
+          if (!isClosed) add(MonitoringFreshnessExpired(generation));
+        },
       );
     }
+
+    final nextState = state.copyWith(
+      eshStatus: eshStatus,
+      isPowerSampleFresh: powerSampleFresh,
+      isEnvironmentSampleFresh: environmentSampleFresh,
+    );
+    _maybeSaveSensorLog(nextState);
+    return nextState;
+  }
+
+  void _maybeSaveSensorLog(MonitoringLoaded state) {
+    if (saveSensorLog == null) return;
+    if (!state.canControl) return;
+    if (!state.mcbData.mcb1.connected || !state.isPowerSampleFresh) return;
+
+    final now = _now();
+    final last = _lastSensorLogCollection;
+    final energyDelta =
+        last == null
+            ? double.infinity
+            : (state.mcbData.totalEnergy - last.totalEnergy).abs();
+    final intervalOk = _lastSensorLogTimestamp == null ||
+        now.difference(_lastSensorLogTimestamp!) >= sensorLogMinInterval;
+
+    if (!intervalOk && energyDelta < sensorLogSignificantChange) return;
+
+    _lastSensorLogTimestamp = now;
+    _lastSensorLogCollection = state.mcbData;
+
+    saveSensorLog!(state.mcbData).catchError((Object error) {
+      // Non-fatal: sensor logging must not break monitoring/control.
+      if (!isClosed) {
+        debugPrint('Sensor log write failed: $error');
+      }
+    });
+  }
+
+  EshSystemStatus _eshStatusFor(int? heartbeat, DateTime now) {
+    if (heartbeat == null) return EshSystemStatus.unknown;
+    final ageSeconds = now.millisecondsSinceEpoch ~/ 1000 - heartbeat;
+    if (ageSeconds < 0) return EshSystemStatus.unknown;
+    return ageSeconds < eshHeartbeatLifetime.inSeconds
+        ? EshSystemStatus.online
+        : EshSystemStatus.offline;
+  }
+
+  bool _isFreshEpochSeconds(int? sampledAt, DateTime now) {
+    if (sampledAt == null) return false;
+    final ageSeconds = now.millisecondsSinceEpoch ~/ 1000 - sampledAt;
+    return ageSeconds >= 0 && ageSeconds < eshHeartbeatLifetime.inSeconds;
   }
 
   void _onDeviceStateUpdated(
@@ -353,6 +534,7 @@ class MonitoringBloc extends Bloc<MonitoringEvent, MonitoringState> {
     _monitoringActive = false;
     final currentState = state;
     if (currentState is MonitoringLoaded) {
+      _cancelFreshnessExpiry();
       emit(currentState.copyWith(isConnected: false));
     } else {
       emit(MonitoringError(event.message));
@@ -364,9 +546,11 @@ class MonitoringBloc extends Bloc<MonitoringEvent, MonitoringState> {
     await _dataSubscription?.cancel();
     await _connectionSubscription?.cancel();
     await _deviceDataSubscription?.cancel();
+    await _slaveAvailabilitySubscription?.cancel();
     _dataSubscription = null;
     _connectionSubscription = null;
     _deviceDataSubscription = null;
+    _slaveAvailabilitySubscription = null;
   }
 
   void _cancelPendingTimers() {
@@ -377,10 +561,17 @@ class MonitoringBloc extends Bloc<MonitoringEvent, MonitoringState> {
     _commandGenerations.clear();
   }
 
+  void _cancelFreshnessExpiry() {
+    _freshnessExpiryTimer?.cancel();
+    _freshnessExpiryTimer = null;
+    _freshnessGeneration++;
+  }
+
   @override
   Future<void> close() async {
     await _cancelSubscriptions();
     _cancelPendingTimers();
+    _cancelFreshnessExpiry();
     return super.close();
   }
 }

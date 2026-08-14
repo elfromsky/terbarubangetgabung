@@ -7,11 +7,13 @@ CanonicalHistoryDto mapFirestoreToCanonicalHistoryDto(
 ) {
   final power = data['power'] as Map<String, dynamic>? ?? {};
   final environment = data['environment'] as Map<String, dynamic>? ?? {};
+  final derived = data['derived'] as Map<String, dynamic>?;
   return CanonicalHistoryDto(
     id: id,
     timestamp: data['timestamp'],
     power: power,
     environment: environment,
+    derived: derived,
   );
 }
 

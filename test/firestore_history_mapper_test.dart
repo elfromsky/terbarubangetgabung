@@ -20,6 +20,7 @@ void main() {
           'energy': 4.25,
         },
         'environment': {'temperature': 27.5, 'humidity': '60'},
+        'derived': {'estimatedCost': 6123.5, 'estimatedEmission': 3.6125},
       }, 'canonical-1');
       final result = mapCanonicalHistoryDtoToEntity(dto);
 
@@ -28,6 +29,8 @@ void main() {
       expect(result.mcb1!.lastUpdate, 1000);
       expect(result.mcb1!.lastUpdate, result.timestamp.millisecondsSinceEpoch);
       expect(result.sensorData!.humidity, 60);
+      expect(result.estimatedCost, 6123.5);
+      expect(result.estimatedEmission, 3.6125);
     },
   );
 

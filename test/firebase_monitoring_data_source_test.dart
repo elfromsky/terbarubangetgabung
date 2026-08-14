@@ -17,13 +17,19 @@ void main() {
 
   test('monitoring DTO/entity mapper normalizes numeric Firebase values', () {
     final dto = mapRealtimeMonitoringDataToDto({
-      'environment': {'temperature': '28.5', 'humidity': 60, 'connected': true},
+      'environment': {
+        'temperature': '28.5',
+        'humidity': 60,
+        'connected': true,
+        'sampled_at': 2000000000,
+      },
       'power': {
         'connected': true,
         'voltage': 220,
         'current': '1.25',
         'power': 275.5,
         'energy': '12.75',
+        'sampled_at': 2000000000,
       },
     });
     final result = mapRealtimeMonitoringDtoToEntity(dto);
@@ -58,6 +64,8 @@ void main() {
       expect(result.mcb1.current, 0);
       expect(result.mcb1.power, 0);
       expect(result.mcb1.energy, 0);
+      expect(result.sensorData.connected, isFalse);
+      expect(result.mcb1.connected, isFalse);
     },
   );
 }

@@ -13,6 +13,13 @@ RealtimeMonitoringDto mapRealtimeMonitoringDataToDto(dynamic value) {
         ? normalizeFirebaseMap(environment)
         : <String, dynamic>{},
     power: power is Map ? normalizeFirebaseMap(power) : <String, dynamic>{},
+    unixTime: parseFirebaseEpochSeconds(root['unix_time']),
+    environmentSampledAtEpochSeconds: environment is Map
+        ? parseFirebaseEpochSeconds(environment['sampled_at'])
+        : null,
+    powerSampledAtEpochSeconds: power is Map
+        ? parseFirebaseEpochSeconds(power['sampled_at'])
+        : null,
   );
 }
 

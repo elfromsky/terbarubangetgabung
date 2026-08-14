@@ -7,13 +7,21 @@ void main() {
     'realtime DTO normalizes nested Firebase map without parsing numbers',
     () {
       final dto = mapRealtimeMonitoringDataToDto({
-        'environment': {'temperature': '28.5', 'humidity': 60},
-        'power': {'voltage': '220', 'energy': 12.5},
+        'unix_time': 2000000000,
+        'environment': {
+          'temperature': '28.5',
+          'humidity': 60,
+          'sampled_at': '1999999999',
+        },
+        'power': {'voltage': '220', 'energy': 12.5, 'sampled_at': 1999999998.0},
       });
 
       expect(dto.environment['temperature'], '28.5');
       expect(dto.power['voltage'], '220');
       expect(dto.power['energy'], 12.5);
+      expect(dto.unixTime, 2000000000);
+      expect(dto.environmentSampledAtEpochSeconds, 1999999999);
+      expect(dto.powerSampledAtEpochSeconds, 1999999998);
     },
   );
 
@@ -23,6 +31,19 @@ void main() {
 
     expect(entity.mcb1.energy, 0);
     expect(entity.sensorData.temperature, 0);
+    expect(entity.heartbeatEpochSeconds, isNull);
+  });
+
+  test('malformed heartbeat and sampled_at map to null', () {
+    final dto = mapRealtimeMonitoringDataToDto({
+      'unix_time': 'invalid',
+      'environment': {'sampled_at': -1},
+      'power': {'sampled_at': 1.5},
+    });
+
+    expect(dto.unixTime, isNull);
+    expect(dto.environmentSampledAtEpochSeconds, isNull);
+    expect(dto.powerSampledAtEpochSeconds, isNull);
   });
 
   test(
@@ -35,9 +56,9 @@ void main() {
       });
       final entity = mapSensorDataDtoToEntity(dto);
 
-      expect(entity.temperature, 26.5);
+      expect(entity.temperature, 0);
       expect(entity.humidity, 0);
-      expect(entity.connected, isTrue);
+      expect(entity.connected, isFalse);
     },
   );
 }

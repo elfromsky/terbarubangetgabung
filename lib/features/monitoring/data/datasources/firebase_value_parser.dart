@@ -17,3 +17,16 @@ double parseFirebaseDouble(dynamic value) {
   if (value is String) return double.tryParse(value) ?? 0.0;
   return 0.0;
 }
+
+int? parseFirebaseEpochSeconds(dynamic value) {
+  if (value is int) return value >= 0 ? value : null;
+  if (value is double && value.isFinite && value == value.truncateToDouble()) {
+    final seconds = value.toInt();
+    return seconds >= 0 ? seconds : null;
+  }
+  if (value is String) {
+    final seconds = int.tryParse(value.trim());
+    return seconds != null && seconds >= 0 ? seconds : null;
+  }
+  return null;
+}

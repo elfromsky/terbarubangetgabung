@@ -36,7 +36,7 @@ class _PageSelectorState extends State<PageSelector> {
     'Alat Elektronik',
   ];
 
-  final List<String> _historyOptions = ['Listrik', 'Suhu'];
+  final List<String> _historyOptions = ['Listrik', 'Suhu', 'Biaya & Emisi'];
 
   final List<String> _controlOptions = [
     'Teras',
@@ -194,12 +194,15 @@ class _PageSelectorState extends State<PageSelector> {
         child: Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Text(
-              selected,
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 15,
-                fontWeight: FontWeight.w600,
+            Flexible(
+              child: Text(
+                selected,
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 15,
+                  fontWeight: FontWeight.w600,
+                ),
               ),
             ),
             const SizedBox(width: 8),
@@ -226,73 +229,72 @@ class _PageSelectorState extends State<PageSelector> {
     required void Function(String) onSelect,
     required IconData Function(String) iconFor,
   }) {
-    return AnimatedCrossFade(
-      firstChild: const SizedBox.shrink(),
-      secondChild: Container(
-        margin: const EdgeInsets.only(top: 6),
-        width: double.infinity,
-        decoration: BoxDecoration(
-          color: Colors.white.withValues(alpha: 0.15),
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(
-            color: Colors.white.withValues(alpha: 0.25),
-            width: 1,
-          ),
-        ),
-        child: Column(
-          children: options.map((option) {
-            final isSelected = selected == option;
-            return InkWell(
-              onTap: () => onSelect(option),
-              borderRadius: BorderRadius.circular(12),
-              child: Container(
-                width: double.infinity,
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 16,
-                  vertical: 12,
-                ),
-                decoration: BoxDecoration(
-                  color: isSelected
-                      ? Colors.white.withValues(alpha: 0.1)
-                      : Colors.transparent,
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Row(
-                  children: [
-                    Icon(
-                      iconFor(option),
-                      color: isSelected ? Colors.amber : Colors.white70,
-                      size: 20,
-                    ),
-                    const SizedBox(width: 12),
-                    Text(
-                      option,
-                      style: TextStyle(
-                        color: isSelected ? Colors.amber : Colors.white,
-                        fontSize: 14,
-                        fontWeight: isSelected
-                            ? FontWeight.bold
-                            : FontWeight.normal,
-                      ),
-                    ),
-                    const Spacer(),
-                    if (isSelected)
-                      const Icon(
-                        Icons.check_rounded,
-                        color: Colors.amber,
-                        size: 18,
-                      ),
-                  ],
+    return AnimatedSize(
+      duration: const Duration(milliseconds: 200),
+      child: isOpen
+          ? Container(
+              margin: const EdgeInsets.only(top: 6),
+              width: double.infinity,
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.15),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                  color: Colors.white.withValues(alpha: 0.25),
+                  width: 1,
                 ),
               ),
-            );
-          }).toList(),
-        ),
-      ),
-      crossFadeState: isOpen
-          ? CrossFadeState.showSecond
-          : CrossFadeState.showFirst,
-      duration: const Duration(milliseconds: 200),
+              child: Column(
+                children: options.map((option) {
+                  final isSelected = selected == option;
+                  return InkWell(
+                    onTap: () => onSelect(option),
+                    borderRadius: BorderRadius.circular(12),
+                    child: Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 12,
+                      ),
+                      decoration: BoxDecoration(
+                        color: isSelected
+                            ? Colors.white.withValues(alpha: 0.1)
+                            : Colors.transparent,
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(
+                            iconFor(option),
+                            color: isSelected ? Colors.amber : Colors.white70,
+                            size: 20,
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Text(
+                              option,
+                              style: TextStyle(
+                                color: isSelected ? Colors.amber : Colors.white,
+                                fontSize: 14,
+                                fontWeight: isSelected
+                                    ? FontWeight.bold
+                                    : FontWeight.normal,
+                              ),
+                            ),
+                          ),
+                          if (isSelected)
+                            const Icon(
+                              Icons.check_rounded,
+                              color: Colors.amber,
+                              size: 18,
+                            ),
+                        ],
+                      ),
+                    ),
+                  );
+                }).toList(),
+              ),
+            )
+          : const SizedBox.shrink(),
     );
   }
 
@@ -315,6 +317,8 @@ class _PageSelectorState extends State<PageSelector> {
         return Icons.electric_bolt_rounded;
       case 'Suhu':
         return Icons.thermostat_rounded;
+      case 'Biaya & Emisi':
+        return Icons.paid_rounded;
       default:
         return Icons.circle;
     }
@@ -370,6 +374,8 @@ class _TabButton extends StatelessWidget {
         child: Center(
           child: Text(
             label,
+            maxLines: 2,
+            textAlign: TextAlign.center,
             style: TextStyle(
               color: isActive ? Colors.red : Colors.white,
               fontSize: 15,

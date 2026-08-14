@@ -7,6 +7,8 @@ class HistoryChartData {
   final List<ChartPoint> energyData;
   final List<ChartPoint> temperatureData;
   final List<ChartPoint> humidityData;
+  final List<ChartPoint> estimatedCostData;
+  final List<ChartPoint> estimatedEmissionData;
 
   HistoryChartData({
     required this.voltageData,
@@ -15,5 +17,7 @@ class HistoryChartData {
     required this.energyData,
     required this.temperatureData,
     required this.humidityData,
+    this.estimatedCostData = const [],
+    this.estimatedEmissionData = const [],
   });
 }

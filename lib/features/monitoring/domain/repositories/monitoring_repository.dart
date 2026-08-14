@@ -5,6 +5,7 @@ abstract interface class MonitoringRepository {
   Stream<McbDataCollection> getMonitoringDataStream();
   Stream<RoomDeviceCollection> getRoomDevicesStream();
   Stream<bool> getConnectionStatus();
+  Stream<bool?> getSlaveOnlineStream();
   Future<void> controlRoomDevice(
     String roomKey,
     String deviceKey,

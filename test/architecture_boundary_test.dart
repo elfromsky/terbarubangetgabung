@@ -82,6 +82,7 @@ void main() {
         'lib/features/monitoring/domain/usecases/watch_monitoring_data_use_case.dart',
         'lib/features/monitoring/domain/usecases/watch_connection_status_use_case.dart',
         'lib/features/monitoring/domain/usecases/watch_room_devices_use_case.dart',
+        'lib/features/monitoring/domain/usecases/watch_slave_availability_use_case.dart',
         'lib/features/monitoring/domain/usecases/control_room_device_use_case.dart',
         'lib/features/monitoring/domain/usecases/estimate_energy_cost_use_case.dart',
         'lib/features/monitoring/domain/usecases/estimate_emission_use_case.dart',
@@ -224,6 +225,10 @@ void main() {
       expect(
         monitoringSource,
         contains('Stream<SensorDataDto> getSensorDataStream()'),
+      );
+      expect(
+        monitoringSource,
+        contains('Stream<bool?> getSlaveOnlineStream();'),
       );
       expect(monitoringSource, isNot(contains('getRawDatabaseStream')));
       expect(monitoringSource, isNot(contains('Stream<Map<String, dynamic>>')));

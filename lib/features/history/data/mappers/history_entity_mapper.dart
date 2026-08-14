@@ -35,6 +35,7 @@ DateTime parseFirestoreTimestamp(dynamic timestamp) {
 
 HistoricalMcbData mapCanonicalHistoryDtoToEntity(CanonicalHistoryDto dto) {
   final timestamp = parseFirestoreTimestamp(dto.timestamp);
+  final derived = dto.derived ?? {};
 
   return HistoricalMcbData(
     id: dto.id,
@@ -51,6 +52,8 @@ HistoricalMcbData mapCanonicalHistoryDtoToEntity(CanonicalHistoryDto dto) {
       temperature: parseFirebaseDouble(dto.environment['temperature']),
       humidity: parseFirebaseDouble(dto.environment['humidity']),
     ),
+    estimatedCost: parseFirebaseDouble(derived['estimatedCost']),
+    estimatedEmission: parseFirebaseDouble(derived['estimatedEmission']),
   );
 }
 
@@ -164,5 +167,38 @@ Map<String, dynamic>? _mapMcbDataToMap(McbData? mcbData) {
     'power': mcbData.power,
     'energy': mcbData.energy,
     'lastUpdate': mcbData.lastUpdate,
+  };
+}
+
+/// Maps a real-time monitoring collection into the canonical `sensorLogs`
+/// write payload.
+Map<String, dynamic> mapMcbDataCollectionToCanonicalHistoryMap({
+  required McbDataCollection collection,
+  required double estimatedCost,
+  required double estimatedEmission,
+  required DateTime timestamp,
+}) {
+  return {
+    'timestamp': timestamp,
+    'power': {
+      'connected': collection.mcb1.connected,
+      'voltage': collection.mcb1.voltage,
+      'current': collection.mcb1.current,
+      'power': collection.mcb1.power,
+      'energy': collection.mcb1.energy,
+      if (collection.mcb1.sampledAtEpochSeconds != null)
+        'sampled_at': collection.mcb1.sampledAtEpochSeconds,
+    },
+    'environment': {
+      'connected': collection.sensorData.connected,
+      'temperature': collection.sensorData.temperature,
+      'humidity': collection.sensorData.humidity,
+      if (collection.sensorData.sampledAtEpochSeconds != null)
+        'sampled_at': collection.sensorData.sampledAtEpochSeconds,
+    },
+    'derived': {
+      'estimatedCost': estimatedCost,
+      'estimatedEmission': estimatedEmission,
+    },
   };
 }

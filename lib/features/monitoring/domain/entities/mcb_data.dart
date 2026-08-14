@@ -5,6 +5,7 @@ class McbData {
   final double power;
   final double energy;
   final int lastUpdate;
+  final int? sampledAtEpochSeconds;
 
   const McbData({
     required this.connected,
@@ -13,6 +14,7 @@ class McbData {
     required this.power,
     required this.energy,
     this.lastUpdate = 0,
+    this.sampledAtEpochSeconds,
   });
 
   factory McbData.empty() {
@@ -32,6 +34,7 @@ class McbData {
     double? power,
     double? energy,
     int? lastUpdate,
+    int? sampledAtEpochSeconds,
   }) {
     return McbData(
       connected: connected ?? this.connected,
@@ -40,11 +43,13 @@ class McbData {
       power: power ?? this.power,
       energy: energy ?? this.energy,
       lastUpdate: lastUpdate ?? this.lastUpdate,
+      sampledAtEpochSeconds:
+          sampledAtEpochSeconds ?? this.sampledAtEpochSeconds,
     );
   }
 
   @override
   String toString() {
-    return 'McbData(connected: $connected, voltage: $voltage, current: $current, power: $power, energy: $energy, lastUpdate: $lastUpdate)';
+    return 'McbData(connected: $connected, voltage: $voltage, current: $current, power: $power, energy: $energy, lastUpdate: $lastUpdate, sampledAtEpochSeconds: $sampledAtEpochSeconds)';
   }
 }

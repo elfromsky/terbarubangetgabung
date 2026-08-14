@@ -39,6 +39,11 @@ class MonitoringRepositoryImpl implements MonitoringRepository {
   }
 
   @override
+  Stream<bool?> getSlaveOnlineStream() {
+    return monitoringDataSource.getSlaveOnlineStream();
+  }
+
+  @override
   Future<void> controlRoomDevice(
     String roomKey,
     String deviceKey,

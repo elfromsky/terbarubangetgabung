@@ -14,13 +14,34 @@ void main() {
     expect(McbDataCollection.empty().mcb1.energy, 0);
   });
 
-  test('SensorData retains heat index and comfort rules', () {
-    const comfortable = SensorData(temperature: 25, humidity: 60);
-    const hot = SensorData(temperature: 31, humidity: 60);
+  test('SensorData temperature categories use exact PRD boundaries', () {
+    String category(double temperature) =>
+        SensorData(temperature: temperature, humidity: 50).temperatureCategory;
 
-    expect(comfortable.heatIndex, 25);
-    expect(comfortable.comfortLevel, 'Nyaman');
-    expect(hot.comfortLevel, 'Panas');
+    expect(category(25.7), 'Dingin');
+    expect(category(25.7001), 'Sejuk');
+    expect(category(28.6), 'Sejuk');
+    expect(category(28.6001), 'Hangat');
+    expect(category(31.4999), 'Hangat');
+    expect(category(31.5), 'Panas');
+  });
+
+  test('SensorData humidity categories use exact PRD boundaries', () {
+    String category(double humidity) =>
+        SensorData(temperature: 28, humidity: humidity).humidityCategory;
+
+    expect(category(60.25), 'Kering');
+    expect(category(60.2501), 'Normal');
+    expect(category(86.6199), 'Normal');
+    expect(category(86.62), 'Lembap');
+  });
+
+  test('SensorData preserves heat index behavior', () {
+    const belowThreshold = SensorData(temperature: 25, humidity: 60);
+    const calculated = SensorData(temperature: 30, humidity: 70);
+
+    expect(belowThreshold.heatIndex, 25);
+    expect(calculated.heatIndex, closeTo(35.04, 0.01));
   });
 
   test('McbData copyWith and collection aggregates preserve values', () {

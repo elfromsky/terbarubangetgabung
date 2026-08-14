@@ -8,15 +8,19 @@ import 'package:esh/features/monitoring/data/datasources/firebase_room_device_da
 import 'package:esh/features/monitoring/data/models/realtime_monitoring_dto.dart';
 import 'package:esh/features/monitoring/data/models/room_device_collection_dto.dart';
 import 'package:esh/features/monitoring/data/repositories/monitoring_repository_impl.dart';
+import 'package:esh/features/monitoring/domain/entities/mcb_data.dart';
 import 'package:esh/features/monitoring/domain/entities/mcb_data_collection.dart';
 import 'package:esh/features/monitoring/domain/entities/room_device_collection.dart';
 import 'package:esh/features/monitoring/domain/entities/room_device_state.dart';
+import 'package:esh/features/monitoring/domain/usecases/estimate_emission_use_case.dart';
+import 'package:esh/features/monitoring/domain/usecases/estimate_energy_cost_use_case.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 class FakeMonitoringDataSource implements MonitoringDataSource {
   final monitoringController =
       StreamController<RealtimeMonitoringDto>.broadcast();
   final connectionController = StreamController<bool>.broadcast();
+  final slaveOnlineController = StreamController<bool?>.broadcast();
 
   @override
   Stream<bool> getConnectionStatus() => connectionController.stream;
@@ -25,9 +29,13 @@ class FakeMonitoringDataSource implements MonitoringDataSource {
   Stream<RealtimeMonitoringDto> getMonitoringDataStream() =>
       monitoringController.stream;
 
+  @override
+  Stream<bool?> getSlaveOnlineStream() => slaveOnlineController.stream;
+
   Future<void> close() async {
     await monitoringController.close();
     await connectionController.close();
+    await slaveOnlineController.close();
   }
 }
 
@@ -52,6 +60,7 @@ class FakeHistoryDataSource implements HistoryDataSource {
   DateTime? endDate;
   int? receivedLimit;
   List<CanonicalHistoryDto> data = const [];
+  Map<String, dynamic>? savedSensorLog;
 
   @override
   Future<List<CanonicalHistoryDto>> getHistoricalData({
@@ -63,6 +72,11 @@ class FakeHistoryDataSource implements HistoryDataSource {
     this.endDate = endDate;
     receivedLimit = limit;
     return data;
+  }
+
+  @override
+  Future<void> saveSensorLog(Map<String, dynamic> data) async {
+    savedSensorLog = data;
   }
 }
 
@@ -216,6 +230,9 @@ void main() {
           'power': 330,
           'energy': '12.75',
         },
+        unixTime: 2000000000,
+        environmentSampledAtEpochSeconds: 1999999999,
+        powerSampledAtEpochSeconds: 1999999998,
       );
       const roomDevicesValue = RoomDeviceCollectionDto(
         rawValue: {
@@ -228,9 +245,11 @@ void main() {
         },
       );
       const connectionValue = true;
+      const slaveOnlineValue = false;
       final monitoringReceived = Completer<McbDataCollection>();
       final roomDevicesReceived = Completer<RoomDeviceCollection>();
       final connectionReceived = Completer<bool>();
+      final slaveOnlineReceived = Completer<bool?>();
       final monitoringSubscription = repository
           .getMonitoringDataStream()
           .listen(monitoringReceived.complete);
@@ -240,6 +259,9 @@ void main() {
       final connectionSubscription = repository.getConnectionStatus().listen(
         connectionReceived.complete,
       );
+      final slaveOnlineSubscription = repository.getSlaveOnlineStream().listen(
+        slaveOnlineReceived.complete,
+      );
 
       addTearDown(monitoringDataSource.close);
       addTearDown(roomDeviceDataSource.close);
@@ -247,11 +269,13 @@ void main() {
         await monitoringSubscription.cancel();
         await roomDevicesSubscription.cancel();
         await connectionSubscription.cancel();
+        await slaveOnlineSubscription.cancel();
       });
 
       monitoringDataSource.monitoringController.add(monitoringValue);
       roomDeviceDataSource.roomController.add(roomDevicesValue);
       monitoringDataSource.connectionController.add(connectionValue);
+      monitoringDataSource.slaveOnlineController.add(slaveOnlineValue);
 
       final monitoring = await monitoringReceived.future;
       expect(monitoring.mcb1.connected, isTrue);
@@ -262,6 +286,9 @@ void main() {
       expect(monitoring.sensorData.temperature, 28.5);
       expect(monitoring.sensorData.humidity, 60);
       expect(monitoring.sensorData.connected, isTrue);
+      expect(monitoring.heartbeatEpochSeconds, 2000000000);
+      expect(monitoring.sensorData.sampledAtEpochSeconds, 1999999999);
+      expect(monitoring.mcb1.sampledAtEpochSeconds, 1999999998);
       final roomDevices = await roomDevicesReceived.future;
       expect(
         roomDevices.find(
@@ -270,6 +297,7 @@ void main() {
         const RoomDeviceValue(isOn: true, brightness: 75),
       );
       expect(await connectionReceived.future, connectionValue);
+      expect(await slaveOnlineReceived.future, slaveOnlineValue);
     },
   );
 
@@ -315,8 +343,42 @@ void main() {
       expect(history.single.mcb1!.current, 1.5);
       expect(history.single.mcb1!.power, 330);
       expect(history.single.mcb1!.energy, 4.25);
-      expect(history.single.sensorData!.temperature, 27.5);
-      expect(history.single.sensorData!.humidity, 60);
+    expect(history.single.sensorData!.temperature, 27.5);
+    expect(history.single.sensorData!.humidity, 60);
+  });
+
+  test(
+    'history repository writes canonical sensorLogs with derived values',
+    () async {
+      final dataSource = FakeHistoryDataSource();
+      const estimateEnergyCost = EstimateEnergyCostUseCase(ratePerKwh: 1000);
+      const estimateEmission = EstimateEmissionUseCase(
+        emissionFactorKgCo2PerKwh: 0.5,
+      );
+      final repository = HistoryRepositoryImpl(
+        historyDataSource: dataSource,
+        estimateEnergyCost: estimateEnergyCost,
+        estimateEmission: estimateEmission,
+      );
+      const collection = McbDataCollection(
+        mcb1: McbData(
+          connected: true,
+          voltage: 220,
+          current: 1,
+          power: 220,
+          energy: 2,
+        ),
+      );
+
+      await repository.saveSensorLog(collection);
+
+      expect(dataSource.savedSensorLog, isNotNull);
+      final power = dataSource.savedSensorLog!['power'] as Map<String, dynamic>;
+      final derived = dataSource.savedSensorLog!['derived']
+          as Map<String, dynamic>;
+      expect(power['energy'], 2.0);
+      expect(derived['estimatedCost'], 2000.0);
+      expect(derived['estimatedEmission'], 1.0);
     },
   );
 }

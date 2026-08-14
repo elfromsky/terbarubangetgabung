@@ -6,6 +6,7 @@ import 'package:firebase_database/firebase_database.dart';
 abstract interface class MonitoringDataSource {
   Stream<RealtimeMonitoringDto> getMonitoringDataStream();
   Stream<bool> getConnectionStatus();
+  Stream<bool?> getSlaveOnlineStream();
 }
 
 class FirebaseMonitoringDataSource implements MonitoringDataSource {
@@ -30,6 +31,14 @@ class FirebaseMonitoringDataSource implements MonitoringDataSource {
   Stream<bool> getConnectionStatus() {
     return database.child('.info/connected').onValue.map((event) {
       return event.snapshot.value == true;
+    });
+  }
+
+  @override
+  Stream<bool?> getSlaveOnlineStream() {
+    return database.child('gateway/status/slave/online').onValue.map((event) {
+      final value = event.snapshot.value;
+      return value is bool ? value : null;
     });
   }
 }
