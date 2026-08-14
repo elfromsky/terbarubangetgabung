@@ -72,6 +72,7 @@ struct DeviceRouteEntry {
 
 static const DeviceRouteEntry ROUTE_TABLE[] = {
   // Dimmable lamps
+  // Bedroom relays are independent; both retain one authoritative CH1 brightness.
   {"kamar_1",  "lampu",       RELAY_KAMAR1_LAMPU,  1, true},
   {"kamar_2",  "lampu",       RELAY_KAMAR2_LAMPU,  1, true},
   {"dapur",    "lampu",       RELAY_DAPUR_LAMPU,   2, true},
@@ -168,9 +169,12 @@ bool applyDeviceCommand(const DeviceCommandPayload &cmd, DeviceStatePayload &out
   if (cmd.state == ESPNOW_STATE_OFF) {
     finalState = ESPNOW_STATE_OFF;
     if (entry->isDimmable) {
-      finalBrightness = cmd.brightness > 0
-        ? cmd.brightness
-        : getDimmerBrightness(entry->dimmerChannel);
+      // Dedicated channel: OFF always reports brightness 0. Shared channel
+      // must retain the active channel brightness so the remaining ON lamp
+      // keeps illuminating at the same level.
+      finalBrightness = hasOtherActiveRelayOnDimmer(entry)
+          ? getDimmerBrightness(entry->dimmerChannel)
+          : cmd.brightness;
     } else {
       finalBrightness = 0;
     }
@@ -200,7 +204,15 @@ bool applyDeviceCommand(const DeviceCommandPayload &cmd, DeviceStatePayload &out
 
   if (entry->dimmerChannel > 0) {
     bool channelNeeded = finalState == ESPNOW_STATE_ON ||
-                         hasOtherActiveRelayOnDimmer(entry);
+                          hasOtherActiveRelayOnDimmer(entry);
+    // Dedicated channel OFF => brightness 0. Shared channel OFF with sibling
+    // ON retains the active brightness. A channel that is still needed must
+    // never be set to zero; bump to the minimum non-zero level.
+    if (!channelNeeded) {
+      finalBrightness = 0;
+    } else if (finalBrightness == 0) {
+      finalBrightness = getDimmerBrightness(entry->dimmerChannel);
+    }
     if (channelNeeded && finalBrightness == 0) {
       finalBrightness = 1;
     }
@@ -248,7 +260,12 @@ void buildPeriodicStateForDevice(uint8_t index, DeviceStatePayload &outState) {
   outState.state = relayOn ? ESPNOW_STATE_ON : ESPNOW_STATE_OFF;
 
   if (entry.isDimmable) {
-    outState.brightness = getDimmerBrightness(entry.dimmerChannel);
+    // Dedicated channel OFF reports brightness 0. Shared channels report the
+    // retained channel brightness while any sibling relay is still ON.
+    bool channelActive = relayOn || hasOtherActiveRelayOnDimmer(&entry);
+    outState.brightness = channelActive
+        ? getDimmerBrightness(entry.dimmerChannel)
+        : 0;
   } else {
     outState.brightness = relayOn ? 100 : 0;
   }

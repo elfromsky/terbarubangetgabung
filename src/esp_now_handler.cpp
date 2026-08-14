@@ -1,4 +1,5 @@
 #include "esp_now_config.h"
+#include "esp_now_keys.h"
 #include <WiFi.h>
 #include <esp_now.h>
 #include <esp_wifi.h>
@@ -16,12 +17,14 @@ static portMUX_TYPE radioMux = portMUX_INITIALIZER_UNLOCKED;
 static bool espNowInitialized = false;
 static bool masterPeerRegistered = false;
 static bool channelLocked = false;
+static bool masterAuthenticated = false;
 static bool pendingPeerRegistration = false;
 static uint8_t lockedChannel = 0;
 static volatile uint8_t pendingBeaconChannel = 0;
 static uint8_t scanChannel = ESPNOW_SCAN_MIN_CHANNEL;
 static uint32_t lastScanStepMs = 0;
 static volatile uint32_t lastValidMasterPacketMs = 0;
+static uint32_t channelLockedAtMs = 0;
 
 // CRC calculation over arbitrary byte buffer
 uint8_t computeCRC(const uint8_t *data, uint16_t len) {
@@ -44,24 +47,46 @@ bool validateStateCRC(const DeviceStatePayload &state) {
   return state.crc == calcCRC;
 }
 
-void handleDiscoveryBeacon(const uint8_t *incomingData, int len) {
-  if (len != (int)sizeof(DiscoveryBeaconPayload)) return;
+bool validateDiscoveryBeacon(const uint8_t *incomingData, int len,
+                             DiscoveryBeaconPayload &beacon) {
+  if (len != (int)sizeof(DiscoveryBeaconPayload)) return false;
 
-  DiscoveryBeaconPayload beacon;
   memcpy(&beacon, incomingData, sizeof(beacon));
 
-  if (beacon.magic != ESPNOW_DISCOVERY_MAGIC) return;
+  if (beacon.magic != ESPNOW_DISCOVERY_MAGIC) return false;
   if (beacon.channel < ESPNOW_SCAN_MIN_CHANNEL ||
-      beacon.channel > ESPNOW_SCAN_MAX_CHANNEL) return;
+      beacon.channel > ESPNOW_SCAN_MAX_CHANNEL) return false;
 
   uint8_t calculatedCRC = computeCRC(
     reinterpret_cast<const uint8_t *>(&beacon),
     sizeof(DiscoveryBeaconPayload) - 1);
-  if (beacon.crc != calculatedCRC) return;
+  return beacon.crc == calculatedCRC;
+}
+
+void handleDiscoveryBeacon(const uint8_t *incomingData, int len) {
+  DiscoveryBeaconPayload beacon;
+  if (!validateDiscoveryBeacon(incomingData, len, beacon)) return;
+
+  bool authenticated;
+  portENTER_CRITICAL(&radioMux);
+  authenticated = masterAuthenticated;
+  portEXIT_CRITICAL(&radioMux);
+  if (authenticated) return;
 
   portENTER_CRITICAL(&radioMux);
-  lastValidMasterPacketMs = millis();
   pendingBeaconChannel = beacon.channel;
+  portEXIT_CRITICAL(&radioMux);
+}
+
+void handleAuthenticatedBeacon(const uint8_t *incomingData, int len) {
+  DiscoveryBeaconPayload beacon;
+  if (!validateDiscoveryBeacon(incomingData, len, beacon)) return;
+
+  portENTER_CRITICAL(&radioMux);
+  if (channelLocked && masterPeerRegistered && beacon.channel == lockedChannel) {
+    masterAuthenticated = true;
+    lastValidMasterPacketMs = millis();
+  }
   portEXIT_CRITICAL(&radioMux);
 }
 
@@ -76,11 +101,15 @@ void onReceiveData(const uint8_t *mac_addr, const uint8_t *incomingData, int len
     handleDiscoveryBeacon(incomingData, len);
     return;
   }
+  if (incomingData[0] == ESPNOW_MSG_AUTHENTICATED_BEACON) {
+    handleAuthenticatedBeacon(incomingData, len);
+    return;
+  }
 
   if (incomingData[0] != ESPNOW_MSG_DEVICE_COMMAND) return;
   bool ready;
   portENTER_CRITICAL(&radioMux);
-  ready = channelLocked && masterPeerRegistered;
+  ready = channelLocked && masterPeerRegistered && masterAuthenticated;
   portEXIT_CRITICAL(&radioMux);
   if (!ready) return;
   if (len != (int)sizeof(DeviceCommandPayload)) return;
@@ -130,6 +159,11 @@ void initEspNow() {
     Serial.println("ESP-NOW initialization failed");
     return;
   }
+  if (esp_now_set_pmk(ESPNOW_PMK) != ESP_OK) {
+    Serial.println("ESP-NOW PMK setup failed");
+    esp_now_deinit();
+    return;
+  }
 
   // Register receive callback
   esp_now_register_recv_cb(onReceiveData);
@@ -156,8 +190,9 @@ bool registerMasterPeerOnLockedChannel() {
 
   esp_now_peer_info_t peerInfo = {};
   memcpy(peerInfo.peer_addr, MASTER_MAC, 6);
+  memcpy(peerInfo.lmk, ESPNOW_LMK, ESP_NOW_KEY_LEN);
   peerInfo.channel = lockedChannel;
-  peerInfo.encrypt = false;
+  peerInfo.encrypt = true;
   peerInfo.ifidx = WIFI_IF_STA;
 
   if (esp_now_add_peer(&peerInfo) != ESP_OK) {
@@ -167,6 +202,8 @@ bool registerMasterPeerOnLockedChannel() {
 
   portENTER_CRITICAL(&radioMux);
   masterPeerRegistered = true;
+  masterAuthenticated = false;
+  channelLockedAtMs = millis();
   portEXIT_CRITICAL(&radioMux);
   Serial.print("ESP-NOW locked master channel: ");
   Serial.println(lockedChannel);
@@ -176,7 +213,8 @@ bool registerMasterPeerOnLockedChannel() {
 bool isEspNowReady() {
   bool ready;
   portENTER_CRITICAL(&radioMux);
-  ready = espNowInitialized && channelLocked && masterPeerRegistered;
+  ready = espNowInitialized && channelLocked && masterPeerRegistered &&
+          masterAuthenticated;
   portEXIT_CRITICAL(&radioMux);
   return ready;
 }
@@ -196,6 +234,8 @@ void scanEspNowChannel() {
     lockedChannel = beaconChannel;
     channelLocked = true;
     masterPeerRegistered = false;
+    masterAuthenticated = false;
+    channelLockedAtMs = millis();
     pendingPeerRegistration = true;
     portEXIT_CRITICAL(&radioMux);
   }
@@ -231,14 +271,18 @@ void scanEspNowChannel() {
 }
 
 void checkEspNowLinkTimeout() {
-  if (!isEspNowReady()) return;
-
   uint32_t now = millis();
   uint32_t lastPacketMs;
+  bool locked;
+  bool authenticated;
   portENTER_CRITICAL(&radioMux);
   lastPacketMs = lastValidMasterPacketMs;
+  locked = channelLocked && masterPeerRegistered;
+  authenticated = masterAuthenticated;
   portEXIT_CRITICAL(&radioMux);
-  if (now - lastPacketMs < ESPNOW_LINK_TIMEOUT_MS) return;
+  if (!locked) return;
+  if (!authenticated && now - channelLockedAtMs < ESPNOW_AUTH_TIMEOUT_MS) return;
+  if (authenticated && now - lastPacketMs < ESPNOW_LINK_TIMEOUT_MS) return;
 
   Serial.println("ESP-NOW link timeout, rescanning channel");
   if (esp_now_is_peer_exist(MASTER_MAC)) {
@@ -248,6 +292,7 @@ void checkEspNowLinkTimeout() {
   portENTER_CRITICAL(&radioMux);
   masterPeerRegistered = false;
   channelLocked = false;
+  masterAuthenticated = false;
   pendingPeerRegistration = false;
   lockedChannel = 0;
   portEXIT_CRITICAL(&radioMux);

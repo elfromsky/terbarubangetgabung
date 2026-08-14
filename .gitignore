@@ -2,3 +2,4 @@
 .kilo
 .opencode
 .vscode
+src/esp_now_keys.local.h
