@@ -1,4 +1,5 @@
 #include "esp_now_protocol.h"
+#include "esp_now_keys.h"
 #include <esp_now.h>
 #include <WiFi.h>
 
@@ -12,6 +13,7 @@ volatile bool lastSendSuccess = false;
 
 static const uint8_t RECEIVE_QUEUE_SIZE = 16;
 static DeviceStatePayload receiveQueue[RECEIVE_QUEUE_SIZE];
+static unsigned long receiveQueueTimestamps[RECEIVE_QUEUE_SIZE];
 static volatile uint8_t receiveQueueHead = 0;
 static volatile uint8_t receiveQueueTail = 0;
 static volatile uint8_t receiveQueueCount = 0;
@@ -58,19 +60,21 @@ void onDataRecv(const uint8_t *mac_addr, const uint8_t *data, int data_len)
     if (receiveQueueCount < RECEIVE_QUEUE_SIZE)
     {
         memcpy(&receiveQueue[receiveQueueTail], data, sizeof(DeviceStatePayload));
+        receiveQueueTimestamps[receiveQueueTail] = millis();
         receiveQueueTail = (receiveQueueTail + 1) % RECEIVE_QUEUE_SIZE;
         receiveQueueCount++;
     }
     portEXIT_CRITICAL(&espNowMux);
 }
 
-bool popReceivedStatePacket(DeviceStatePayload &packet)
+bool popReceivedStatePacket(DeviceStatePayload &packet, unsigned long &receivedMs)
 {
     bool available = false;
     portENTER_CRITICAL(&espNowMux);
     if (receiveQueueCount > 0)
     {
         packet = receiveQueue[receiveQueueHead];
+        receivedMs = receiveQueueTimestamps[receiveQueueHead];
         receiveQueueHead = (receiveQueueHead + 1) % RECEIVE_QUEUE_SIZE;
         receiveQueueCount--;
         available = true;
@@ -133,6 +137,12 @@ bool initESPNow()
         Serial.println("ESP-NOW init failed");
         return false;
     }
+    if (esp_now_set_pmk(ESPNOW_PMK) != ESP_OK)
+    {
+        Serial.println("ESP-NOW PMK setup failed");
+        esp_now_deinit();
+        return false;
+    }
     esp_now_register_send_cb(onDataSent);
     esp_now_register_recv_cb(onDataRecv);
     espNowInitialized = true;
@@ -173,9 +183,10 @@ bool registerSlavePeer()
 
     esp_now_peer_info_t peerInfo = {};
     memcpy(peerInfo.peer_addr, SLAVE_MAC_ADDRESS, 6);
+    memcpy(peerInfo.lmk, ESPNOW_LMK, ESP_NOW_KEY_LEN);
     peerInfo.channel = channel;
     peerInfo.ifidx = WIFI_IF_STA;
-    peerInfo.encrypt = false;
+    peerInfo.encrypt = true;
     esp_err_t result = esp_now_add_peer(&peerInfo);
     if (result == ESP_ERR_ESPNOW_NOT_INIT && recoverESPNowInit())
     {
@@ -252,9 +263,20 @@ bool sendDiscoveryBeacon()
     beacon.magic = ESPNOW_DISCOVERY_MAGIC;
     beacon.crc = computeXorCRC(reinterpret_cast<const uint8_t *>(&beacon), sizeof(beacon) - 1);
 
-    return esp_now_send(ESPNOW_BROADCAST_MAC,
-                        reinterpret_cast<const uint8_t *>(&beacon),
-                        sizeof(beacon)) == ESP_OK;
+    bool broadcastSent = esp_now_send(ESPNOW_BROADCAST_MAC,
+                                      reinterpret_cast<const uint8_t *>(&beacon),
+                                      sizeof(beacon)) == ESP_OK;
+
+    if (registerSlavePeer())
+    {
+        beacon.type = ESPNOW_MSG_AUTHENTICATED_BEACON;
+        beacon.crc = computeXorCRC(reinterpret_cast<const uint8_t *>(&beacon),
+                                   sizeof(beacon) - 1);
+        esp_now_send(SLAVE_MAC_ADDRESS,
+                     reinterpret_cast<const uint8_t *>(&beacon),
+                     sizeof(beacon));
+    }
+    return broadcastSent;
 }
 
 bool sendCommandToSlave(const DeviceCommandPayload &cmd)

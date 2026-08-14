@@ -19,6 +19,7 @@ unsigned long lastNtpRequestMs = 0;
 
 constexpr unsigned long WIFI_RECONNECT_MAX_MS = 30000;
 constexpr unsigned long NTP_RETRY_MS = 60000;
+constexpr time_t MIN_VALID_EPOCH_SECONDS = 1704067200; // 2024-01-01 UTC
 
 void requestNtpSync()
 {
@@ -69,14 +70,14 @@ void initNTP()
 
     time_t now;
     int attempts = 0;
-    while ((now = time(nullptr)) < 1000000000 && attempts < 30)
+    while ((now = time(nullptr)) < MIN_VALID_EPOCH_SECONDS && attempts < 30)
     {
         Serial.print(".");
         delay(500);
         attempts++;
     }
 
-    timeInitialized = (now > 1000000000);
+    timeInitialized = (now >= MIN_VALID_EPOCH_SECONDS);
 
     if (timeInitialized)
     {
@@ -147,7 +148,7 @@ void maintainConnections()
     if (!timeInitialized)
     {
         time_t now = time(nullptr);
-        if (now > 1000000000)
+        if (now >= MIN_VALID_EPOCH_SECONDS)
         {
             timeInitialized = true;
             Serial.print("Time synchronized: ");
@@ -162,16 +163,38 @@ void maintainConnections()
 
 String getTimestamp()
 {
-    if (!timeInitialized)
+    int64_t epochSeconds;
+    if (!getValidEpochSeconds(epochSeconds))
     {
-        return "1970-01-01 00:00:00";
+        return "";
     }
 
-    time_t now = time(nullptr);
+    time_t now = static_cast<time_t>(epochSeconds);
     struct tm *timeinfo = localtime(&now);
+    if (timeinfo == nullptr)
+    {
+        return "";
+    }
     char buffer[25];
     strftime(buffer, sizeof(buffer), "%Y-%m-%d %H:%M:%S", timeinfo);
     return String(buffer);
+}
+
+bool getValidEpochSeconds(int64_t &epochSeconds)
+{
+    if (!timeInitialized)
+    {
+        return false;
+    }
+
+    time_t now = time(nullptr);
+    if (now < MIN_VALID_EPOCH_SECONDS)
+    {
+        return false;
+    }
+
+    epochSeconds = static_cast<int64_t>(now);
+    return true;
 }
 
 bool isWiFiConnected()

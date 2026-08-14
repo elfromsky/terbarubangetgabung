@@ -4,21 +4,29 @@
 #include "relay.h"
 #include "wifi_firebase.h"
 #include "esp_now_protocol.h"
+#include "firebase_command_router.h"
+#include <cmath>
+#include <limits>
 
 HardwareSerial SensorSerial(2);
 
 #define RXD2 41
 #define TXD2 42
 
-const unsigned long FIREBASE_INTERVAL = 5000;
+const unsigned long HEARTBEAT_INTERVAL = 5000;
+const unsigned long SENSOR_UPLOAD_INTERVAL = 5000;
 const unsigned long SENSOR_POLL_INTERVAL = 500;
-unsigned long lastFirebaseUpload = 0;
+unsigned long lastHeartbeatUpload = 0;
+unsigned long lastSensorUpload = 0;
 unsigned long lastSensorPoll = 0;
 unsigned long lastDiscoveryBeacon = 0;
 
-float latestTemperature = -1;
-float latestHumidity = -1;
+float latestTemperature = std::numeric_limits<float>::quiet_NaN();
+float latestHumidity = std::numeric_limits<float>::quiet_NaN();
 PzemData latestPzemData = {-1, -1, -1, -1, -1, -1, false};
+int64_t latestTemperatureSampledAt = 0;
+int64_t latestHumiditySampledAt = 0;
+int64_t latestPzemSampledAt = 0;
 
 enum class SensorPollStep
 {
@@ -42,6 +50,10 @@ void pollSensorsNonBlocking()
     {
     case SensorPollStep::Temperature:
         latestTemperature = readModBus(0x0001);
+        if (std::isfinite(latestTemperature))
+        {
+            getValidEpochSeconds(latestTemperatureSampledAt);
+        }
         Serial.print("{\"temperature\":");
         Serial.print(latestTemperature);
         Serial.print(",\"humidity\":");
@@ -52,6 +64,10 @@ void pollSensorsNonBlocking()
 
     case SensorPollStep::Humidity:
         latestHumidity = readModBus(0x0002);
+        if (std::isfinite(latestHumidity))
+        {
+            getValidEpochSeconds(latestHumiditySampledAt);
+        }
         Serial.print("{\"temperature\":");
         Serial.print(latestTemperature);
         Serial.print(",\"humidity\":");
@@ -64,6 +80,7 @@ void pollSensorsNonBlocking()
         latestPzemData = readPZEM();
         if (latestPzemData.connected)
         {
+            getValidEpochSeconds(latestPzemSampledAt);
             Serial.print("{\"voltage\":");
             Serial.print(latestPzemData.voltage);
             Serial.print(",\"current\":");
@@ -94,6 +111,7 @@ void setup()
     Serial.println("BOOT OK");
 
     initRelays();
+    initializeMasterRouteStates();
 
     SensorSerial.begin(9600, SERIAL_8N1, RXD2, TXD2);
     pinMode(RS485_DIR, OUTPUT);
@@ -131,21 +149,48 @@ void loop()
     checkFirebaseCommands();
     pollSensorsNonBlocking();
 
-    if (currentMillis - lastFirebaseUpload >= FIREBASE_INTERVAL)
+    if (currentMillis - lastHeartbeatUpload >= HEARTBEAT_INTERVAL)
     {
-        lastFirebaseUpload = currentMillis;
+        lastHeartbeatUpload = currentMillis;
 
         if (!FirebaseReady())
         {
-            Serial.println("{\"firebase\":\"waiting_ready\"}");
-        }
-        else if (sendSensorData(latestTemperature, latestHumidity, latestPzemData))
-        {
-            Serial.println("{\"firebase\":\"upload_success\"}");
+            Serial.println("{\"firebase_heartbeat\":\"waiting_ready\"}");
         }
         else
         {
-            Serial.println("{\"firebase\":\"upload_failed\"}");
+            bool heartbeatSent = sendHeartbeat();
+            Serial.println(heartbeatSent
+                               ? "{\"firebase_heartbeat\":\"upload_success\"}"
+                               : "{\"firebase_heartbeat\":\"upload_failed\"}");
+
+        }
+    }
+
+    if (currentMillis - lastSensorUpload >= SENSOR_UPLOAD_INTERVAL)
+    {
+        lastSensorUpload = currentMillis;
+
+        if (!FirebaseReady())
+        {
+            Serial.println("{\"firebase_telemetry\":\"waiting_ready\"}");
+        }
+        else
+        {
+            int64_t environmentSampledAt = 0;
+            if (std::isfinite(latestTemperature) && std::isfinite(latestHumidity) &&
+                latestTemperatureSampledAt > 0 && latestHumiditySampledAt > 0)
+            {
+                environmentSampledAt = latestTemperatureSampledAt < latestHumiditySampledAt
+                                           ? latestTemperatureSampledAt
+                                           : latestHumiditySampledAt;
+            }
+            bool sensorDataSent = sendSensorData(
+                latestTemperature, latestHumidity, environmentSampledAt,
+                latestPzemData, latestPzemData.connected ? latestPzemSampledAt : 0);
+            Serial.println(sensorDataSent
+                               ? "{\"firebase_telemetry\":\"upload_success\"}"
+                               : "{\"firebase_telemetry\":\"upload_failed\"}");
         }
     }
 

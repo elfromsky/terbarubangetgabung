@@ -1,6 +1,7 @@
 #include "firebase_app.h"
 #include "firebase_command_router.h"
 #include "firebase_config.h"
+#include "google_firebase_ca.h"
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
 
@@ -10,8 +11,10 @@ namespace
 {
 WiFiClientSecure authSslClient;
 WiFiClientSecure commandStreamSslClient;
+WiFiClientSecure slaveStatusSslClient;
 AsyncClient firebaseClient(authSslClient);
 AsyncClient streamClient(commandStreamSslClient);
+AsyncClient slaveStatusClient(slaveStatusSslClient);
 UserAuth userAuth(FIREBASE_API_KEY, FIREBASE_USER_EMAIL, FIREBASE_USER_PASSWORD, 3000);
 FirebaseApp app;
 RealtimeDatabase database;
@@ -31,7 +34,7 @@ constexpr unsigned long COMMAND_STREAM_RETRY_MS = 5000;
 
 void configureSslClient(WiFiClientSecure &client)
 {
-    client.setInsecure();
+    client.setCACert(GOOGLE_FIREBASE_CA_PEM);
     client.setHandshakeTimeout(5);
 }
 }
@@ -40,6 +43,7 @@ void firebaseAppInit()
 {
     configureSslClient(authSslClient);
     configureSslClient(commandStreamSslClient);
+    configureSslClient(slaveStatusSslClient);
 
     Serial.printf("Firebase Client v%s\n", FIREBASE_CLIENT_VERSION);
     Serial.println("Initializing Firebase app...");
@@ -75,6 +79,11 @@ AsyncClientClass &firebaseDataClient()
 AsyncClientClass &firebaseStreamClient()
 {
     return streamClient;
+}
+
+AsyncClientClass &firebaseSlaveStatusClient()
+{
+    return slaveStatusClient;
 }
 
 void firebaseSubscribeToCommandStream()

@@ -6,6 +6,7 @@
 #include <cstring>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include <string>
 
 struct DeviceCommandPayload {
   uint8_t type;
@@ -44,6 +45,7 @@ static_assert(sizeof(DiscoveryBeaconPayload) == 7, "DiscoveryBeaconPayload must 
 #define CMD_TYPE_COMMAND 1
 #define CMD_TYPE_STATE   2
 #define ESPNOW_MSG_DISCOVERY_BEACON 3
+#define ESPNOW_MSG_AUTHENTICATED_BEACON 4
 
 #define ESPNOW_DISCOVERY_MAGIC 0xA5C35A7EUL
 #define ESPNOW_DISCOVERY_INTERVAL_MS 1000UL
@@ -74,7 +76,7 @@ extern volatile bool sendCallbackReceived;
 extern volatile bool lastSendSuccess;
 extern portMUX_TYPE espNowMux;
 
-bool popReceivedStatePacket(DeviceStatePayload& packet);
-String generateRequestId();
+bool popReceivedStatePacket(DeviceStatePayload& packet, unsigned long& receivedMs);
+std::string generateRequestId();
 
 #endif

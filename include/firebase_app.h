@@ -9,6 +9,7 @@ bool firebaseReady();
 RealtimeDatabase &firebaseDatabase();
 AsyncClientClass &firebaseDataClient();
 AsyncClientClass &firebaseStreamClient();
+AsyncClientClass &firebaseSlaveStatusClient();
 void firebaseSubscribeToCommandStream();
 void firebaseMaintainCommandStream();
 void firebaseMarkCommandStreamActive();

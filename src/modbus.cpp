@@ -1,96 +1,141 @@
 #include "modbus.h"
 #include <HardwareSerial.h>
+#include <limits>
 
 extern HardwareSerial SensorSerial;
 
-// Making sure the data not changed even one bit during transmission
-static uint16_t modbusCRC(byte *buf, int len)
+namespace
+{
+constexpr byte MODBUS_SLAVE_ID = 0x01;
+constexpr byte MODBUS_READ_INPUT_REGISTERS = 0x04;
+constexpr byte MODBUS_REGISTER_BYTE_COUNT = 0x02;
+constexpr size_t MODBUS_RESPONSE_LENGTH = 7;
+constexpr unsigned long MODBUS_RESPONSE_TIMEOUT_MS = 500;
+constexpr unsigned long MODBUS_FRAME_GAP_MS = 5;
+constexpr uint16_t TEMPERATURE_REGISTER = 0x0001;
+constexpr uint16_t HUMIDITY_REGISTER = 0x0002;
+
+float unavailableReading()
+{
+  return std::numeric_limits<float>::quiet_NaN();
+}
+
+static uint16_t modbusCRC(const byte *buf, size_t len)
 {
   uint16_t crc = 0xFFFF;
-  for (int pos = 0; pos < len; pos++)
+  for (size_t pos = 0; pos < len; pos++)
   {
-    // Assign crc with the XOR of the next byte data
-    // Cast buf[pos] to uint16_t since XOR need to have the same bit width
-    // Adding 8 new bits to the crc since casting 8 bit to 16 bit so the first 8 is 0
-    crc ^= (uint16_t)buf[pos];
+    crc ^= static_cast<uint16_t>(buf[pos]);
 
-    // Loop 8 time since we only need to process 8 bits, while the other 8 is padding
-    for (int i = 8; i != 0; i--)
+    for (byte bit = 0; bit < 8; bit++)
     {
-      // Checking if the lowest bit is 1
       if ((crc & 0x0001) != 0)
       {
-        // Shift right by 1 bit
-        // Then assign crc with the XOR of the polynomial
         crc >>= 1;
         crc ^= 0xA001;
       }
       else
       {
-        // Just shift right by 1 bit
         crc >>= 1;
       }
     }
   }
   return crc;
 }
+} // namespace
 
-// Read the Modbus register
-// High Byte : the first 8 number from 16 bits
-// Low Byte  : the last 8 number from 16 bits
 float readModBus(uint16_t reg)
 {
-  byte cmd[8];
-  cmd[0] = 0x01;       // Slave ID ( check ref manual )
-  cmd[1] = 0x04;       // Function code ( check ref manual )
-  cmd[2] = reg >> 8;   // Hight Byte (0x00)
-  cmd[3] = reg & 0xFF; // Low Byte (0x01)
-  cmd[4] = 0x00;       // Count High Byte (0x00)
-  cmd[5] = 0x01;       // Count Low Byte (0x01, read 1 register)
-  // array 0 - 5 is the command data, 6 and 7 is CRC
+  byte cmd[8] = {
+      MODBUS_SLAVE_ID,
+      MODBUS_READ_INPUT_REGISTERS,
+      static_cast<byte>(reg >> 8),
+      static_cast<byte>(reg & 0xFF),
+      0x00,
+      0x01,
+      0x00,
+      0x00};
 
   uint16_t crc = modbusCRC(cmd, 6);
-  cmd[6] = crc & 0xFF;        // CRC Low Byte
-  cmd[7] = (crc >> 8) & 0xFF; // CRC High Byte
+  cmd[6] = static_cast<byte>(crc & 0xFF);
+  cmd[7] = static_cast<byte>((crc >> 8) & 0xFF);
 
-  digitalWrite(RS485_DIR, HIGH); // Send through RS485
+  while (SensorSerial.available() > 0)
+  {
+    SensorSerial.read();
+  }
+
+  digitalWrite(RS485_DIR, HIGH);
   delay(10);
-  SensorSerial.write(cmd, 8);   // Send Data (cmd) with length of (8) bytes
-  SensorSerial.flush();         // Making sure all data is sent before switching to receive mode
-  digitalWrite(RS485_DIR, LOW); // Switch to receive mode
-  delay(200);                   // Wait for response
+  SensorSerial.write(cmd, sizeof(cmd));
+  SensorSerial.flush();
+  digitalWrite(RS485_DIR, LOW);
 
-  // Actual respon only 7 bytes
-  // response[0] = 0x01;   ->     Slave ID
-  // response[1] = 0x04;    ->    Function code
-  // response[2] = 0x02;    ->    Byte count (2 data bytes)
-  // response[3] = HIGH;    ->    Data high byte
-  // response[4] = LOW;     ->    Data low byte
-  // response[5] = CRC_LOW; ->    CRC low byte
-  // response[6] = CRC_HIGH;->    CRC high byte
+  byte response[MODBUS_RESPONSE_LENGTH] = {};
+  size_t responseLength = 0;
+  bool responseTooLong = false;
+  unsigned long start = millis();
+  unsigned long lastByteAt = start;
 
-  byte response[8]; // Allocate 8 bytes to avoid buffer overflow
-  unsigned int i = 0;
-  unsigned long start = millis(); // Start time for response timeout
-  while (millis() - start < 500)  // Wait for response
+  while (millis() - start < MODBUS_RESPONSE_TIMEOUT_MS)
   {
-    // Check if data is available
-    if (SensorSerial.available())
+    while (SensorSerial.available() > 0)
     {
-      // Read the incoming byte by assigning it to the response array
-      response[i++] = SensorSerial.read();
-      if (i >= sizeof(response))
+      int incoming = SensorSerial.read();
+      if (incoming < 0)
+      {
         break;
+      }
+
+      lastByteAt = millis();
+      if (responseLength < MODBUS_RESPONSE_LENGTH)
+      {
+        response[responseLength++] = static_cast<byte>(incoming);
+      }
+      else
+      {
+        responseTooLong = true;
+      }
     }
+
+    if (responseLength == MODBUS_RESPONSE_LENGTH &&
+        millis() - lastByteAt >= MODBUS_FRAME_GAP_MS)
+    {
+      break;
+    }
+
+    delay(1);
   }
 
-  // Check response validity
-  if (i >= 5 && response[1] == 0x04)
+  if (responseTooLong || responseLength != MODBUS_RESPONSE_LENGTH ||
+      response[0] != MODBUS_SLAVE_ID ||
+      response[1] != MODBUS_READ_INPUT_REGISTERS ||
+      response[2] != MODBUS_REGISTER_BYTE_COUNT)
   {
-    // Shifting high byte to the left by 8 bits and ORing with low byte
-    int raw = (response[3] << 8) | response[4];
-    return raw / 10.0; // Convert to float and divide by 10 for temperature/humidity since it have 0.1f resolution ( check ref manual )
+    return unavailableReading();
   }
 
-  return -1;
+  uint16_t responseCRC = modbusCRC(response, MODBUS_RESPONSE_LENGTH - 2);
+  if (response[5] != static_cast<byte>(responseCRC & 0xFF) ||
+      response[6] != static_cast<byte>((responseCRC >> 8) & 0xFF))
+  {
+    return unavailableReading();
+  }
+
+  uint16_t raw = (static_cast<uint16_t>(response[3]) << 8) | response[4];
+  if (reg == TEMPERATURE_REGISTER)
+  {
+    float temperature = static_cast<int16_t>(raw) / 10.0f;
+    return temperature >= -40.0f && temperature <= 125.0f
+               ? temperature
+               : unavailableReading();
+  }
+
+  float value = raw / 10.0f;
+  if (reg == HUMIDITY_REGISTER && (value < 0.0f || value > 100.0f))
+  {
+    return unavailableReading();
+  }
+
+  return value;
 }

@@ -2,8 +2,10 @@
 #include "firebase_app.h"
 #include "esp_now_protocol.h"
 #include "relay.h"
+#include "wifi_firebase.h"
 #include <ArduinoJson.h>
 #include <cstring>
+#include <sys/time.h>
 
 namespace
 {
@@ -12,6 +14,8 @@ struct ParsedCommand
     bool valid;
     bool state;
     uint8_t brightness;
+    char requestId[32];
+    int64_t issuedAtMs;
 };
 
 struct DeviceRoute
@@ -30,6 +34,8 @@ struct DeviceRoute
     bool publishPending;
     unsigned long nextRetryMs;
     unsigned long nextPublishMs;
+    char desiredRequestId[32];
+    int64_t desiredIssuedAtMs;
 };
 
 DeviceRoute routes[] = {
@@ -52,6 +58,12 @@ constexpr unsigned long SEND_RETRY_DELAY_MS = 300;
 constexpr unsigned long ACK_TIMEOUT_MS = 3000;
 constexpr unsigned long CYCLE_BACKOFF_MS = 2000;
 constexpr unsigned long PUBLISH_RETRY_MS = 2000;
+constexpr unsigned long SLAVE_ONLINE_WINDOW_MS = 15000;
+constexpr unsigned long SLAVE_STATUS_PUBLISH_INTERVAL_MS = 5000;
+constexpr unsigned long SLAVE_STATUS_RETRY_MS = 1000;
+constexpr unsigned long SLAVE_STATUS_PUBLISH_TIMEOUT_MS = 5000;
+constexpr int64_t COMMAND_FUTURE_TOLERANCE_MS = 5000;
+constexpr int64_t COMMAND_MAX_AGE_MS = 15000;
 
 struct PendingCommand
 {
@@ -67,10 +79,185 @@ struct PendingCommand
 PendingCommand pendingCmd = {};
 size_t nextSlaveRoute = 0;
 size_t nextPublishRoute = 0;
+uint8_t sharedBedroomDesiredBrightness = 0;
+int64_t sharedBedroomIssuedAtMs = 0;
+char sharedBedroomRequestId[32] = {};
+int sharedBedroomOwnerRoute = -1;
+bool slavePacketSeen = false;
+unsigned long lastSlavePacketMs = 0;
+bool slaveLastSeenEpochKnown = false;
+int64_t lastSlaveSeenEpochSeconds = 0;
+bool slaveOnline = false;
+bool slaveStatusPublishPending = false;
+bool slaveStatusPublishUrgent = true;
+bool slaveStatusPublished = false;
+bool publishedSlaveOnline = false;
+unsigned long slaveStatusPublishStartedMs = 0;
+unsigned long nextSlaveStatusPublishMs = 0;
+uint32_t slaveStatusPublishGeneration = 0;
+String slaveStatusPublishUid;
 
 bool deadlineReached(unsigned long now, unsigned long deadline)
 {
     return static_cast<long>(now - deadline) >= 0;
+}
+
+void handleSlaveStatusPublishResult(AsyncResult &result)
+{
+    if (!result.isResult() || !slaveStatusPublishPending ||
+        result.uid() != slaveStatusPublishUid)
+    {
+        return;
+    }
+
+    if (result.isError())
+    {
+        slaveStatusPublishPending = false;
+        slaveStatusPublishUrgent = true;
+        nextSlaveStatusPublishMs = millis() + SLAVE_STATUS_RETRY_MS;
+        Serial.print("Slave status publish failed: ");
+        Serial.println(result.error().message());
+        return;
+    }
+
+    if (!result.available())
+    {
+        return;
+    }
+
+    slaveStatusPublishPending = false;
+    slaveStatusPublished = true;
+    if (slaveOnline != publishedSlaveOnline)
+    {
+        slaveStatusPublishUrgent = true;
+        nextSlaveStatusPublishMs = millis();
+    }
+    else
+    {
+        nextSlaveStatusPublishMs = slaveStatusPublishStartedMs +
+                                   SLAVE_STATUS_PUBLISH_INTERVAL_MS;
+    }
+}
+
+void noteValidSlavePacket(unsigned long receivedMs)
+{
+    unsigned long nowMs = millis();
+    lastSlavePacketMs = receivedMs;
+    slavePacketSeen = true;
+
+    int64_t epochSeconds;
+    if (getValidEpochSeconds(epochSeconds))
+    {
+        slaveLastSeenEpochKnown = true;
+        lastSlaveSeenEpochSeconds = epochSeconds - (nowMs - receivedMs) / 1000;
+    }
+}
+
+void refreshSlaveAvailability(unsigned long now)
+{
+    bool nextOnline = slavePacketSeen &&
+                      now - lastSlavePacketMs < SLAVE_ONLINE_WINDOW_MS;
+    if (nextOnline == slaveOnline)
+    {
+        return;
+    }
+
+    if (slaveStatusPublishPending)
+    {
+        firebaseSlaveStatusClient().stopAsync(slaveStatusPublishUid);
+        slaveStatusPublishPending = false;
+    }
+    slaveOnline = nextOnline;
+    slaveStatusPublishUrgent = true;
+    nextSlaveStatusPublishMs = now;
+}
+
+void publishSlaveAvailability(unsigned long now)
+{
+    refreshSlaveAvailability(now);
+
+    if (slaveStatusPublishPending)
+    {
+        if (now - slaveStatusPublishStartedMs < SLAVE_STATUS_PUBLISH_TIMEOUT_MS)
+        {
+            return;
+        }
+
+        firebaseSlaveStatusClient().stopAsync(slaveStatusPublishUid);
+        slaveStatusPublishPending = false;
+        slaveStatusPublishUrgent = true;
+        nextSlaveStatusPublishMs = now + SLAVE_STATUS_RETRY_MS;
+        Serial.println("Slave status publish timeout");
+        return;
+    }
+
+    if (!firebaseReady() || !deadlineReached(now, nextSlaveStatusPublishMs) ||
+        (!slaveStatusPublishUrgent && slaveStatusPublished &&
+         now - slaveStatusPublishStartedMs < SLAVE_STATUS_PUBLISH_INTERVAL_MS))
+    {
+        return;
+    }
+
+    JsonDocument document;
+    document["online"] = slaveOnline;
+    if (slaveLastSeenEpochKnown)
+    {
+        document["last_seen"] = lastSlaveSeenEpochSeconds;
+    }
+    else
+    {
+        document["last_seen"] = nullptr;
+    }
+
+    String payload;
+    serializeJson(document, payload);
+    slaveStatusPublishStartedMs = now;
+    publishedSlaveOnline = slaveOnline;
+    slaveStatusPublishPending = true;
+    slaveStatusPublishUrgent = false;
+    slaveStatusPublishGeneration++;
+    slaveStatusPublishUid = String("slaveStatus_") + slaveStatusPublishGeneration;
+    firebaseDatabase().set<object_t>(
+        firebaseSlaveStatusClient(), "/gateway/status/slave",
+        object_t(payload.c_str()), handleSlaveStatusPublishResult,
+        slaveStatusPublishUid);
+}
+
+bool usesSharedBedroomDimmer(const DeviceRoute &route)
+{
+    return route.owner == DeviceOwner::Slave && route.dimmable &&
+           strcmp(route.deviceKey, "lampu") == 0 &&
+           (strcmp(route.roomKey, "kamar_1") == 0 || strcmp(route.roomKey, "kamar_2") == 0);
+}
+
+bool commandVersionIsNewer(int64_t issuedAtMs, const char *requestId,
+                           const DeviceRoute &route)
+{
+    return !route.desiredKnown || issuedAtMs > route.desiredIssuedAtMs ||
+           (issuedAtMs == route.desiredIssuedAtMs &&
+            strcmp(requestId, route.desiredRequestId) > 0);
+}
+
+bool sharedBedroomVersionIsNewer(int64_t issuedAtMs, const char *requestId)
+{
+    return sharedBedroomOwnerRoute < 0 ||
+           issuedAtMs > sharedBedroomIssuedAtMs ||
+           (issuedAtMs == sharedBedroomIssuedAtMs &&
+            strcmp(requestId, sharedBedroomRequestId) > 0);
+}
+
+uint8_t desiredBrightnessForRoute(size_t routeIndex)
+{
+    const DeviceRoute &route = routes[routeIndex];
+    if (!usesSharedBedroomDimmer(route))
+    {
+        return route.desiredBrightness;
+    }
+    if (sharedBedroomOwnerRoute >= 0)
+    {
+        return sharedBedroomDesiredBrightness;
+    }
+    return route.actualKnown ? route.actualBrightness : route.desiredBrightness;
 }
 
 int findRoute(const String &roomKey, const String &deviceKey)
@@ -99,25 +286,127 @@ int findSlaveRoute(const char *roomKey, const char *deviceKey)
     return -1;
 }
 
+bool getCurrentEpochMilliseconds(int64_t &epochMs)
+{
+    int64_t epochSeconds;
+    struct timeval nowValue;
+    if (!getValidEpochSeconds(epochSeconds) || gettimeofday(&nowValue, nullptr) != 0)
+    {
+        return false;
+    }
+
+    epochMs = static_cast<int64_t>(nowValue.tv_sec) * 1000 + nowValue.tv_usec / 1000;
+    return true;
+}
+
+void disableDesiredCommand(DeviceRoute &route, const char *reason)
+{
+    size_t routeIndex = static_cast<size_t>(&route - routes);
+    if (sharedBedroomOwnerRoute == static_cast<int>(routeIndex))
+    {
+        sharedBedroomOwnerRoute = -1;
+        sharedBedroomDesiredBrightness = route.actualKnown ? route.actualBrightness : 0;
+        sharedBedroomIssuedAtMs = 0;
+        sharedBedroomRequestId[0] = '\0';
+    }
+    route.desiredKnown = false;
+    route.desiredState = false;
+    route.desiredBrightness = 0;
+    route.dirty = false;
+    route.desiredRequestId[0] = '\0';
+    route.desiredIssuedAtMs = 0;
+
+    Serial.print("Desired command disabled for ");
+    Serial.print(route.roomKey);
+    Serial.print("/");
+    Serial.print(route.deviceKey);
+    Serial.print(": ");
+    Serial.println(reason);
+}
+
+bool ensureDesiredCommandFresh(DeviceRoute &route)
+{
+    if (!route.desiredKnown)
+    {
+        route.dirty = false;
+        return false;
+    }
+
+    int64_t nowMs;
+    if (!getCurrentEpochMilliseconds(nowMs))
+    {
+        disableDesiredCommand(route, "NTP time unavailable");
+        return false;
+    }
+    if (route.desiredIssuedAtMs <= nowMs - COMMAND_MAX_AGE_MS)
+    {
+        disableDesiredCommand(route, "command expired");
+        return false;
+    }
+    return true;
+}
+
+void expireDesiredCommands()
+{
+    for (size_t i = 0; i < ROUTE_COUNT; i++)
+    {
+        if (routes[i].desiredKnown)
+        {
+            ensureDesiredCommandFresh(routes[i]);
+        }
+    }
+}
+
 bool actualMatchesDesired(const DeviceRoute &route)
 {
     if (!route.desiredKnown || !route.actualKnown || route.desiredState != route.actualState)
     {
         return false;
     }
-    return !route.dimmable ||
-           (!route.desiredState && route.desiredBrightness == 0) ||
+    if (!route.dimmable)
+    {
+        return true;
+    }
+    if (usesSharedBedroomDimmer(route))
+    {
+        size_t routeIndex = static_cast<size_t>(&route - routes);
+        return sharedBedroomOwnerRoute != static_cast<int>(routeIndex) ||
+               sharedBedroomDesiredBrightness == route.actualBrightness;
+    }
+    return (!route.desiredState && route.desiredBrightness == 0) ||
            route.desiredBrightness == route.actualBrightness;
 }
 
 void refreshDirty(DeviceRoute &route)
 {
-    route.dirty = route.desiredKnown && !actualMatchesDesired(route);
+    route.dirty = ensureDesiredCommandFresh(route) && !actualMatchesDesired(route);
+}
+
+bool commandIsFresh(int64_t issuedAtMs)
+{
+    int64_t nowMs;
+    if (!getCurrentEpochMilliseconds(nowMs))
+    {
+        Serial.println("Invalid command: NTP time unavailable");
+        return false;
+    }
+
+    if (issuedAtMs > nowMs + COMMAND_FUTURE_TOLERANCE_MS)
+    {
+        Serial.println("Invalid command: issued_at is too far in the future");
+        return false;
+    }
+    if (issuedAtMs <= nowMs - COMMAND_MAX_AGE_MS)
+    {
+        Serial.println("Invalid command: command is stale");
+        return false;
+    }
+    return true;
 }
 
 ParsedCommand parseCommand(const DeviceRoute &route, JsonVariantConst value)
 {
-    ParsedCommand command = {false, false, 0};
+    ParsedCommand command = {};
     if (!value.is<JsonObjectConst>())
     {
         Serial.println("Invalid command: expected object payload");
@@ -125,6 +414,15 @@ ParsedCommand parseCommand(const DeviceRoute &route, JsonVariantConst value)
     }
 
     JsonObjectConst object = value.as<JsonObjectConst>();
+    size_t expectedFieldCount = route.dimmable ? 4 : 3;
+    if (object.size() != expectedFieldCount)
+    {
+        Serial.println(route.dimmable
+                           ? "Invalid dimmer command: expected state, brightness, request_id, issued_at"
+                           : "Invalid relay command: expected state, request_id, issued_at");
+        return command;
+    }
+
     JsonVariantConst state = object["state"];
     if (!state.is<bool>())
     {
@@ -132,22 +430,41 @@ ParsedCommand parseCommand(const DeviceRoute &route, JsonVariantConst value)
         return command;
     }
 
+    JsonVariantConst requestId = object["request_id"];
+    const char *requestIdValue = requestId.is<const char *>() ? requestId.as<const char *>() : nullptr;
+    size_t requestIdLength = requestIdValue == nullptr ? 0 : strlen(requestIdValue);
+    if (requestIdLength == 0 || requestIdLength >= sizeof(command.requestId))
+    {
+        Serial.println("Invalid command: request_id must contain 1..31 characters");
+        return command;
+    }
+
+    JsonVariantConst issuedAt = object["issued_at"];
+    if (!issuedAt.is<int64_t>())
+    {
+        Serial.println("Invalid command: issued_at must be an epoch millisecond integer");
+        return command;
+    }
+    int64_t issuedAtMs = issuedAt.as<int64_t>();
+    if (!commandIsFresh(issuedAtMs))
+    {
+        return command;
+    }
+    command.issuedAtMs = issuedAtMs;
+
+    command.state = state.as<bool>();
+    strncpy(command.requestId, requestIdValue, sizeof(command.requestId) - 1);
+
     if (!route.dimmable)
     {
-        if (object.size() != 1)
-        {
-            Serial.println("Invalid relay command: expected only state");
-            return command;
-        }
         command.valid = true;
-        command.state = state.as<bool>();
         return command;
     }
 
     JsonVariantConst brightness = object["brightness"];
-    if (object.size() != 2 || !brightness.is<int>())
+    if (!brightness.is<int>())
     {
-        Serial.println("Invalid dimmer command: expected state bool and brightness integer");
+        Serial.println("Invalid dimmer command: brightness must be integer");
         return command;
     }
 
@@ -159,7 +476,6 @@ ParsedCommand parseCommand(const DeviceRoute &route, JsonVariantConst value)
     }
 
     command.valid = true;
-    command.state = state.as<bool>();
     command.brightness = static_cast<uint8_t>(command.state && brightnessValue == 0 ? 1 : brightnessValue);
     return command;
 }
@@ -182,17 +498,49 @@ void acceptDesired(size_t routeIndex, JsonVariantConst value)
         return;
     }
 
+    if (!commandVersionIsNewer(command.issuedAtMs, command.requestId, route))
+    {
+        Serial.println("Command ignored: older or duplicate version");
+        return;
+    }
+
     route.desiredKnown = true;
     route.desiredState = command.state;
     route.desiredBrightness = command.brightness;
+    strncpy(route.desiredRequestId, command.requestId, sizeof(route.desiredRequestId) - 1);
+    route.desiredRequestId[sizeof(route.desiredRequestId) - 1] = '\0';
+    route.desiredIssuedAtMs = command.issuedAtMs;
+
+    // Relay state remains per route. Only the newest command version owns CH1 brightness.
+    bool sharedBrightnessChanged = usesSharedBedroomDimmer(route) &&
+                                   command.brightness > 0 &&
+                                   sharedBedroomVersionIsNewer(command.issuedAtMs,
+                                                               command.requestId);
+    if (sharedBrightnessChanged)
+    {
+        sharedBedroomDesiredBrightness = command.brightness;
+        sharedBedroomIssuedAtMs = command.issuedAtMs;
+        strncpy(sharedBedroomRequestId, command.requestId,
+                sizeof(sharedBedroomRequestId) - 1);
+        sharedBedroomRequestId[sizeof(sharedBedroomRequestId) - 1] = '\0';
+        sharedBedroomOwnerRoute = static_cast<int>(routeIndex);
+    }
     refreshDirty(route);
     route.nextRetryMs = millis();
 
-    if (pendingCmd.active && pendingCmd.routeIndex == routeIndex)
+    if (pendingCmd.active &&
+        (pendingCmd.routeIndex == routeIndex ||
+         (sharedBrightnessChanged &&
+          usesSharedBedroomDimmer(routes[pendingCmd.routeIndex]))))
     {
-        bool payloadIsCurrent = pendingCmd.payload.state == (route.desiredState ? 1 : 0) &&
-                                pendingCmd.payload.brightness ==
-                                    (route.dimmable ? route.desiredBrightness : (route.desiredState ? 100 : 0));
+        DeviceRoute &pendingRoute = routes[pendingCmd.routeIndex];
+        bool payloadIsCurrent = pendingCmd.payload.state == (pendingRoute.desiredState ? 1 : 0) &&
+                                  pendingCmd.payload.brightness ==
+                                      (pendingRoute.dimmable
+                                           ? desiredBrightnessForRoute(pendingCmd.routeIndex)
+                                           :
+                                                               (pendingRoute.desiredState ? 100 : 0)) &&
+                                  strcmp(pendingCmd.payload.requestId, pendingRoute.desiredRequestId) == 0;
         if (!payloadIsCurrent && !pendingCmd.waitingForAck)
         {
             pendingCmd.active = false;
@@ -208,7 +556,7 @@ void acceptDesired(size_t routeIndex, JsonVariantConst value)
     if (route.dimmable)
     {
         Serial.print(" brightness=");
-        Serial.print(route.desiredBrightness);
+        Serial.print(desiredBrightnessForRoute(routeIndex));
     }
     Serial.println();
 }
@@ -426,7 +774,8 @@ void reconcileMasterRoutes()
     for (size_t i = 0; i < ROUTE_COUNT; i++)
     {
         DeviceRoute &route = routes[i];
-        if (route.owner != DeviceOwner::Master || !route.desiredKnown || !route.dirty)
+        if (route.owner != DeviceOwner::Master ||
+            !ensureDesiredCommandFresh(route) || !route.dirty)
         {
             continue;
         }
@@ -464,6 +813,38 @@ void updateActual(size_t routeIndex, bool state, uint8_t brightness)
     if (route.dirty)
     {
         route.nextRetryMs = millis();
+    }
+
+    if (!usesSharedBedroomDimmer(route))
+    {
+        return;
+    }
+
+    // Every CH1 report updates shared brightness; semantic relay states stay independent.
+    for (size_t i = 0; i < ROUTE_COUNT; i++)
+    {
+        if (i == routeIndex || !usesSharedBedroomDimmer(routes[i]))
+        {
+            continue;
+        }
+
+        DeviceRoute &candidate = routes[i];
+        bool brightnessChanged = candidate.actualBrightness != normalizedBrightness;
+        candidate.actualBrightness = normalizedBrightness;
+        if (!candidate.actualKnown)
+        {
+            continue;
+        }
+        candidate.publishPending = candidate.publishPending || brightnessChanged;
+        if (brightnessChanged)
+        {
+            candidate.nextPublishMs = millis();
+        }
+        refreshDirty(candidate);
+        if (candidate.dirty)
+        {
+            candidate.nextRetryMs = millis();
+        }
     }
 }
 
@@ -553,6 +934,11 @@ void schedulePendingRetry(const char *reason)
     Serial.println(route.deviceKey);
 
     pendingCmd.waitingForAck = false;
+    if (!ensureDesiredCommandFresh(route))
+    {
+        pendingCmd.active = false;
+        return;
+    }
     if (pendingCmd.attempts >= MAX_SEND_ATTEMPTS)
     {
         clearPendingCycle(CYCLE_BACKOFF_MS);
@@ -572,9 +958,10 @@ void startPendingCycle(size_t routeIndex)
     strncpy(pendingCmd.payload.roomKey, route.roomKey, sizeof(pendingCmd.payload.roomKey) - 1);
     strncpy(pendingCmd.payload.deviceKey, route.deviceKey, sizeof(pendingCmd.payload.deviceKey) - 1);
     pendingCmd.payload.state = route.desiredState ? 1 : 0;
-    pendingCmd.payload.brightness = route.dimmable ? route.desiredBrightness : (route.desiredState ? 100 : 0);
-    String requestId = generateRequestId();
-    strncpy(pendingCmd.payload.requestId, requestId.c_str(), sizeof(pendingCmd.payload.requestId) - 1);
+    pendingCmd.payload.brightness = route.dimmable
+                                        ? desiredBrightnessForRoute(routeIndex)
+                                        : (route.desiredState ? 100 : 0);
+    strncpy(pendingCmd.payload.requestId, route.desiredRequestId, sizeof(pendingCmd.payload.requestId) - 1);
     pendingCmd.payload.crc = computeXorCRC(reinterpret_cast<const uint8_t *>(&pendingCmd.payload), sizeof(pendingCmd.payload) - 1);
 }
 
@@ -590,8 +977,11 @@ void startNextSlaveCycle()
     {
         size_t routeIndex = (nextSlaveRoute + offset) % ROUTE_COUNT;
         DeviceRoute &route = routes[routeIndex];
-        if (route.owner == DeviceOwner::Slave && route.desiredKnown && route.dirty &&
-            deadlineReached(now, route.nextRetryMs))
+        if (route.owner != DeviceOwner::Slave || !ensureDesiredCommandFresh(route))
+        {
+            continue;
+        }
+        if (route.dirty && deadlineReached(now, route.nextRetryMs))
         {
             nextSlaveRoute = (routeIndex + 1) % ROUTE_COUNT;
             startPendingCycle(routeIndex);
@@ -605,9 +995,17 @@ void attemptPendingSend()
     if (pendingCmd.active)
     {
         DeviceRoute &route = routes[pendingCmd.routeIndex];
+        if (!pendingCmd.waitingForAck && !ensureDesiredCommandFresh(route))
+        {
+            pendingCmd.active = false;
+            return;
+        }
         bool payloadIsCurrent = pendingCmd.payload.state == (route.desiredState ? 1 : 0) &&
-                                pendingCmd.payload.brightness ==
-                                    (route.dimmable ? route.desiredBrightness : (route.desiredState ? 100 : 0));
+                                  pendingCmd.payload.brightness ==
+                                      (route.dimmable
+                                           ? desiredBrightnessForRoute(pendingCmd.routeIndex)
+                                           : (route.desiredState ? 100 : 0)) &&
+                                 strcmp(pendingCmd.payload.requestId, route.desiredRequestId) == 0;
         if (!payloadIsCurrent && !pendingCmd.waitingForAck)
         {
             pendingCmd.active = false;
@@ -648,7 +1046,8 @@ void processSendResult()
 void processStatePackets()
 {
     DeviceStatePayload packet;
-    while (popReceivedStatePacket(packet))
+    unsigned long receivedMs;
+    while (popReceivedStatePacket(packet, receivedMs))
     {
         uint8_t crc = computeXorCRC(reinterpret_cast<const uint8_t *>(&packet), sizeof(packet) - 1);
         if (packet.type != CMD_TYPE_STATE || crc != packet.crc)
@@ -667,6 +1066,8 @@ void processStatePackets()
             continue;
         }
 
+        noteValidSlavePacket(receivedMs);
+
         bool matchedAck = pendingCmd.active &&
                           static_cast<size_t>(routeIndex) == pendingCmd.routeIndex &&
                           strcmp(packet.requestId, pendingCmd.payload.requestId) == 0;
@@ -680,8 +1081,11 @@ void processStatePackets()
             else
             {
                 DeviceRoute &route = routes[routeIndex];
-                route.dirty = true;
-                route.nextRetryMs = millis() + CYCLE_BACKOFF_MS;
+                if (ensureDesiredCommandFresh(route))
+                {
+                    route.dirty = true;
+                    route.nextRetryMs = millis() + CYCLE_BACKOFF_MS;
+                }
                 Serial.print("Slave ACK error code=");
                 Serial.print(packet.errorCode);
                 Serial.print(": ");
@@ -721,6 +1125,23 @@ void processStatePackets()
         }
     }
 }
+}
+
+void initializeMasterRouteStates()
+{
+    for (size_t i = 0; i < ROUTE_COUNT; i++)
+    {
+        DeviceRoute &route = routes[i];
+        if (route.owner != DeviceOwner::Master)
+        {
+            continue;
+        }
+        route.actualKnown = true;
+        route.actualState = getMasterRelayState(route.roomKey, route.deviceKey);
+        route.actualBrightness = 0;
+        route.publishPending = true;
+        route.nextPublishMs = millis();
+    }
 }
 
 void handleFirebaseResult(AsyncResult &aResult)
@@ -839,10 +1260,12 @@ void handleCommandStream(RealtimeDatabaseResult &stream)
 
 void processSlaveCommunication()
 {
+    expireDesiredCommands();
     processStatePackets();
     processSendResult();
     reconcileMasterRoutes();
     startNextSlaveCycle();
     attemptPendingSend();
     flushPendingRoomStates();
+    publishSlaveAvailability(millis());
 }

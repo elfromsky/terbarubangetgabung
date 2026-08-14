@@ -6,6 +6,7 @@
 
 void handleFirebaseResult(AsyncResult &aResult);
 void handleCommandStream(RealtimeDatabaseResult &stream);
+void initializeMasterRouteStates();
 void processSlaveCommunication();
 
 #endif
