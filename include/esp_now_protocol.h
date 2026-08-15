@@ -6,7 +6,6 @@
 #include <cstring>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include <string>
 
 struct DeviceCommandPayload {
   uint8_t type;
@@ -77,6 +76,6 @@ extern volatile bool lastSendSuccess;
 extern portMUX_TYPE espNowMux;
 
 bool popReceivedStatePacket(DeviceStatePayload& packet, unsigned long& receivedMs);
-std::string generateRequestId();
+String generateRequestId();
 
 #endif

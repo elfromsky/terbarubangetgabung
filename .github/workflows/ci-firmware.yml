@@ -1,0 +1,65 @@
+name: Firmware CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-master:
+    name: Build Master (revised + synthetic provisioning)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install PlatformIO
+        run: python -m pip install --upgrade platformio
+
+      - name: Generate synthetic provisioning
+        run: bash scripts/ci/prepare-synthetic-provisioning.sh master "$GITHUB_WORKSPACE"
+
+      - name: Build Master firmware (compile only)
+        run: pio run -e esp32-s3-devkitc-1
+
+  build-slave:
+    name: Build Slave (revised + synthetic provisioning)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install PlatformIO
+        run: python -m pip install --upgrade platformio
+
+      # The Master and Slave components live in separate, unrelated Git
+      # histories within this repository. They are NOT merged. The exact
+      # revised Slave snapshot is extracted using git worktree, never by
+      # rewriting or merging history.
+      - name: Extract revised Slave snapshot (no history merge)
+        run: |
+          SLAVE_ROOT="$(mktemp -d)"
+          git worktree add --detach "$SLAVE_ROOT" 6d306cf
+          echo "SLAVE_ROOT=$SLAVE_ROOT" >> "$GITHUB_ENV"
+
+      - name: Generate synthetic provisioning
+        run: bash scripts/ci/prepare-synthetic-provisioning.sh slave "$SLAVE_ROOT"
+
+      - name: Build Slave firmware (compile only)
+        run: pio run -e esp32-s3-devkitc-1
+        working-directory: ${{ env.SLAVE_ROOT }}
+
+      - name: Clean up Slave worktree
+        if: always()
+        run: git worktree remove --force "$SLAVE_ROOT" || true
