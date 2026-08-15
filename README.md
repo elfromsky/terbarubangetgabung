@@ -43,6 +43,8 @@ flutter run
 
 Konfigurasi Firebase lokal harus tersedia sebelum aplikasi dijalankan. Baris kosong yang sengaja dipertahankan pada `lib/firebase_options.dart` bukan bagian perbaikan otomatis.
 
+Prosedur pendaftaran perangkat (custom claim `owner`/`controller`) dan siklus penyegaran token dijelaskan di `docs/firebase-security-provisioning.md`.
+
 ## Verifikasi
 
 ```powershell
