@@ -288,3 +288,61 @@ describe("RTDB commands rules", () => {
     );
   });
 });
+
+describe("RTDB command issued_at freshness boundaries", () => {
+  // Reference: database.rules.json
+  //   "issued_at": ".validate": "newData.isNumber() &&
+  //     newData.val() >= now - 15000 && newData.val() <= now + 5000"
+  // Both bounds are INCLUSIVE (>= and <=).
+  //
+  // NOTE: the emulator's `now` is a live millisecond clock that advances
+  // between test construction and rule evaluation by a few ms. Regressions
+  // near the exact +-1ms edge are therefore asserted at safe margins;
+  // the exact inclusive boundary semantics are documented from the
+  // operator level and reproduced in the deterministic Master mirror test
+  // (tools/evidence_gaps_test.py), not from a frozen emulator clock.
+
+  let seq = 0;
+  function freshCommand(issuedAt) {
+    seq += 1;
+    return {
+      state: true,
+      request_id: "freshtest-" + seq,
+      issued_at: issuedAt,
+    };
+  }
+
+  async function writeIssuedAt(ctx, issuedAt) {
+    return set(
+      ref(ctx.database(), "commands/rooms/teras/tools/sanyo"),
+      freshCommand(issuedAt)
+    );
+  }
+
+  const now = () => Math.floor(Date.now());
+
+  test("issued_at far in the past is rejected (stale)", async () => {
+    const ctx = testEnv.authenticatedContext("owner-ctrl", makeToken(true, true));
+    await assertFails(writeIssuedAt(ctx, now() - 20000));
+  });
+
+  test("issued_at within the 15s stale window is accepted", async () => {
+    const ctx = testEnv.authenticatedContext("owner-ctrl", makeToken(true, true));
+    await assertSucceeds(writeIssuedAt(ctx, now() - 14000));
+  });
+
+  test("issued_at equal to now is accepted", async () => {
+    const ctx = testEnv.authenticatedContext("owner-ctrl", makeToken(true, true));
+    await assertSucceeds(writeIssuedAt(ctx, now()));
+  });
+
+  test("issued_at within the 5s future tolerance is accepted", async () => {
+    const ctx = testEnv.authenticatedContext("owner-ctrl", makeToken(true, true));
+    await assertSucceeds(writeIssuedAt(ctx, now() + 4000));
+  });
+
+  test("issued_at beyond the 5s future tolerance is rejected", async () => {
+    const ctx = testEnv.authenticatedContext("owner-ctrl", makeToken(true, true));
+    await assertFails(writeIssuedAt(ctx, now() + 6000));
+  });
+});
