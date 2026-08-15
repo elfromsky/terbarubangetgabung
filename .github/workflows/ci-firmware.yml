@@ -50,10 +50,12 @@ jobs:
       # histories within this repository. They are NOT merged. The exact
       # revised Slave snapshot is extracted using git worktree, never by
       # rewriting or merging history.
+      # Pinned to 7cd0950 = slave tip containing the Issue #7 payload-aware
+      # duplicate-cache fix (PR #13); previously pinned 6d306cf.
       - name: Extract revised Slave snapshot (no history merge)
         run: |
           SLAVE_ROOT="$(mktemp -d)"
-          git worktree add --detach "$SLAVE_ROOT" 6d306cf
+          git worktree add --detach "$SLAVE_ROOT" 7cd09508599db4dcfd72c9c3d3c78a9476a92e38
           echo "SLAVE_ROOT=$SLAVE_ROOT" >> "$GITHUB_ENV"
 
       - name: Generate synthetic provisioning
