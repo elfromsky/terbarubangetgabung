@@ -12,7 +12,7 @@ service cloud.firestore {
 
     match /sensorLogs/{document} {
       allow read: if isOwner() || isController();
-      allow create: if isController()
+      allow create: if isOwner()
                     && request.resource.data.keys().hasOnly([
                       'timestamp', 'power', 'environment', 'derived'
                     ])
