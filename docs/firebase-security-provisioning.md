@@ -9,8 +9,8 @@ placeholders and all secrets stay outside the repository.
 
 | Claim | Grant | Assigned to |
 | ----- | ----- | ----------- |
-| `owner: true` | Read telemetry/state, **write commands** (`/commands`), read Firestore history | Each approved Flutter application installation |
-| `controller: true` | **Write** telemetry/state (`/device`, `/rooms`, `/gateway`), read commands, create Firestore `sensorLogs` | The ESP32 Master Firebase Authentication user |
+| `owner: true` | Read telemetry/state, **write commands** (`/commands`), read Firestore history, **create Firestore `sensorLogs`** | Each approved Flutter application installation |
+| `controller: true` | **Write** telemetry/state (`/device`, `/rooms`, `/gateway`), read commands, read Firestore history | The ESP32 Master Firebase Authentication user |
 
 The Flutter bootstrap gate (`hasTrustedDeviceClaim`) trusts an identity that
 holds **either** `owner: true` **or** `controller: true`. Both are valid at the
@@ -23,10 +23,11 @@ role per identity:
 A missing claim, a `false` value, or any non-boolean value is **rejected**
 (authorization fails closed).
 
-> Note: the Flutter application is also the writer of Firestore `sensorLogs`,
-> while `firestore.rules` currently permits `create` only for `controller`.
-> That writer/role mismatch is tracked separately (issue #3) and is out of
-> scope for this provisioning contract.
+> Note: the Flutter application is the authoritative writer of Firestore
+> `sensorLogs`, and `firestore.rules` permits `create` for `owner`. The ESP32
+> Master/`controller` is a different trusted role that does **not** write
+> Firestore `sensorLogs` (it only writes RTDB telemetry/state); it retains
+> read access to Firestore history.
 
 ## Prerequisites
 
