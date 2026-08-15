@@ -7,11 +7,20 @@
 // Duplicate command cache
 // ──────────────────────────────────────────────
 
+// The cache key is the full transmitted command identity:
+// requestId + roomKey + deviceKey + commandState + commandBrightness.
+// This deduplicates only exact transport-level replays of the same logical
+// command (Issue #7): a retry reuses an identical payload, so it still hits;
+// a reused requestId carrying a different state or brightness is a new
+// command and must not be suppressed. state/brightness hold the values as
+// transmitted in DeviceCommandPayload, not the normalized result values.
 struct DuplicateCacheEntry {
   bool used;
   char requestId[32];
   char roomKey[24];
   char deviceKey[32];
+  uint8_t commandState;
+  uint8_t commandBrightness;
   uint8_t resultState;
   uint8_t resultBrightness;
   uint8_t resultSuccess;
@@ -24,12 +33,16 @@ static uint8_t duplicateCacheIndex = 0;
 
 static DuplicateCacheEntry* duplicateFind(const char* requestId,
                                           const char* roomKey,
-                                          const char* deviceKey) {
+                                          const char* deviceKey,
+                                          uint8_t state,
+                                          uint8_t brightness) {
   for (uint8_t i = 0; i < DUPLICATE_CACHE_SIZE; i++) {
     if (duplicateCache[i].used &&
         strcmp(duplicateCache[i].requestId, requestId) == 0 &&
         strcmp(duplicateCache[i].roomKey, roomKey) == 0 &&
-        strcmp(duplicateCache[i].deviceKey, deviceKey) == 0) {
+        strcmp(duplicateCache[i].deviceKey, deviceKey) == 0 &&
+        duplicateCache[i].commandState == state &&
+        duplicateCache[i].commandBrightness == brightness) {
       return &duplicateCache[i];
     }
   }
@@ -39,6 +52,8 @@ static DuplicateCacheEntry* duplicateFind(const char* requestId,
 static void duplicateStore(const char* requestId,
                            const char* roomKey,
                            const char* deviceKey,
+                           uint8_t commandState,
+                           uint8_t commandBrightness,
                            uint8_t state,
                            uint8_t brightness,
                            uint8_t success,
@@ -51,6 +66,8 @@ static void duplicateStore(const char* requestId,
   entry.roomKey[sizeof(entry.roomKey) - 1] = '\0';
   strncpy(entry.deviceKey, deviceKey, sizeof(entry.deviceKey) - 1);
   entry.deviceKey[sizeof(entry.deviceKey) - 1] = '\0';
+  entry.commandState = commandState;
+  entry.commandBrightness = commandBrightness;
   entry.resultState = state;
   entry.resultBrightness = brightness;
   entry.resultSuccess = success;
@@ -131,7 +148,8 @@ bool applyDeviceCommand(const DeviceCommandPayload &cmd, DeviceStatePayload &out
   copyStr(outState.requestId, cmd.requestId, sizeof(outState.requestId));
 
   // ── Duplicate check: skip hardware if already executed ──
-  DuplicateCacheEntry* dup = duplicateFind(cmd.requestId, cmd.roomKey, cmd.deviceKey);
+  DuplicateCacheEntry* dup = duplicateFind(cmd.requestId, cmd.roomKey, cmd.deviceKey,
+                                           cmd.state, cmd.brightness);
   if (dup != nullptr) {
     outState.state = dup->resultState;
     outState.brightness = dup->resultBrightness;
@@ -147,6 +165,7 @@ bool applyDeviceCommand(const DeviceCommandPayload &cmd, DeviceStatePayload &out
     outState.errorCode = ESPNOW_ERR_UNKNOWN_DEVICE;
     outState.timestamp = millis();
     duplicateStore(cmd.requestId, cmd.roomKey, cmd.deviceKey,
+                   cmd.state, cmd.brightness,
                    outState.state, outState.brightness,
                    outState.success, outState.errorCode);
     return false;
@@ -161,6 +180,7 @@ bool applyDeviceCommand(const DeviceCommandPayload &cmd, DeviceStatePayload &out
     outState.errorCode = ESPNOW_ERR_INVALID_BRIGHTNESS;
     outState.timestamp = millis();
     duplicateStore(cmd.requestId, cmd.roomKey, cmd.deviceKey,
+                   cmd.state, cmd.brightness,
                    outState.state, outState.brightness,
                    outState.success, outState.errorCode);
     return false;
@@ -194,6 +214,7 @@ bool applyDeviceCommand(const DeviceCommandPayload &cmd, DeviceStatePayload &out
     outState.errorCode = ESPNOW_ERR_INVALID_STATE;
     outState.timestamp = millis();
     duplicateStore(cmd.requestId, cmd.roomKey, cmd.deviceKey,
+                   cmd.state, cmd.brightness,
                    outState.state, outState.brightness,
                    outState.success, outState.errorCode);
     return false;
@@ -234,6 +255,7 @@ bool applyDeviceCommand(const DeviceCommandPayload &cmd, DeviceStatePayload &out
   outState.timestamp = millis();
 
   duplicateStore(cmd.requestId, cmd.roomKey, cmd.deviceKey,
+                 cmd.state, cmd.brightness,
                  finalState, finalBrightness,
                  ESPNOW_RESULT_OK, 0);
 
