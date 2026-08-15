@@ -22,6 +22,9 @@ jobs:
       - name: Install PlatformIO
         run: python -m pip install --upgrade platformio
 
+      - name: Credential hygiene check (no tracked local headers or literals)
+        run: bash scripts/ci/check-credential-hygiene.sh
+
       - name: Generate synthetic provisioning
         run: bash scripts/ci/prepare-synthetic-provisioning.sh master "$GITHUB_WORKSPACE"
 
