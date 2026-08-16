@@ -21,6 +21,8 @@ import 'package:firebase_database/firebase_database.dart';
 
 class AppDependencies {
   static const defaultElectricityRate = 1440.70;
+  // kg CO2/kWh. Grid/year scope and authoritative basis:
+  // docs/RESEARCH_PARAMETER_VALIDATION.md
   static const defaultEmissionFactor = 0.85;
 
   final MonitoringRepository monitoringRepository;

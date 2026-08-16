@@ -44,6 +44,34 @@ void main() {
     expect(calculated.heatIndex, closeTo(35.04, 0.01));
   });
 
+  // Reference vectors from the NWS/WPC Rothfusz method (Fahrenheit regression,
+  // converted back to Celsius). See docs/RESEARCH_PARAMETER_VALIDATION.md.
+  // These are independent published values, not copies of the Dart formula.
+  test('SensorData heat index matches NWS Rothfusz reference vectors', () {
+    // (temperature °C, humidity %, expected heat index °C)
+    const cases = <(double, double, double)>[
+      (27, 40, 26.86),
+      (27, 80, 29.74),
+      (30, 50, 31.05),
+      (30, 70, 35.04),
+      (32, 60, 37.07),
+      (35, 70, 50.34),
+    ];
+
+    for (final (temperature, humidity, expected) in cases) {
+      final heatIndex =
+          SensorData(temperature: temperature, humidity: humidity).heatIndex;
+      expect(heatIndex, closeTo(expected, 0.02),
+          reason: 'T=$temperature RH=$humidity');
+    }
+  });
+
+  test('SensorData heat index uses temperature below 27 °C activation', () {
+    expect(const SensorData(temperature: 26.9, humidity: 90).heatIndex, 26.9);
+    expect(const SensorData(temperature: 27.0, humidity: 90).heatIndex,
+        isNot(closeTo(27.0, 0.01)));
+  });
+
   test('McbData copyWith and collection aggregates preserve values', () {
     const mcb = McbData(
       connected: true,
