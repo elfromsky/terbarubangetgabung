@@ -3,11 +3,11 @@
 /// Contract:
 /// - `timestamp`: Firestore Timestamp or epoch millis.
 /// - `power`: map with `connected`, `voltage`, `current`, `power`, `energy`,
-///   optional `sampled_at`.
+///   optional `sampled_at`. `power.energy` is in **kWh**.
 /// - `environment`: map with `connected`, `temperature`, `humidity`,
 ///   optional `sampled_at`.
 /// - `derived`: optional map with computed values such as `estimatedCost`
-///   and `estimatedEmission`.
+///   and `estimatedEmission`, both derived from the kWh energy value.
 class CanonicalHistoryDto {
   final String id;
   final dynamic timestamp;

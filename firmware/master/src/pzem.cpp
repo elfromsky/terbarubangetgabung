@@ -13,6 +13,8 @@ namespace
 constexpr float PZEM_MAX_VOLTAGE = 260.0f;
 constexpr float PZEM_MAX_CURRENT = 100.0f;
 constexpr float PZEM_MAX_POWER = 23000.0f;
+// Energy is kWh: PZEM004Tv30::energy() divides the raw 1-Wh register by 1000.
+// The device energy counter maxes out around 9999.99 kWh.
 constexpr float PZEM_MAX_ENERGY = 9999.99f;
 constexpr float PZEM_MAX_FREQUENCY = 65.0f;
 constexpr float PZEM_MAX_POWER_FACTOR = 1.0f;
@@ -42,7 +44,7 @@ PzemData readPZEM() {
     data.voltage = validatedReading(voltage, 80.0f, PZEM_MAX_VOLTAGE);
     data.current = validatedReading(pzem.current(), 0.0f, PZEM_MAX_CURRENT);
     data.power = validatedReading(pzem.power(), 0.0f, PZEM_MAX_POWER);
-    data.energy = validatedReading(pzem.energy(), 0.0f, PZEM_MAX_ENERGY);
+    data.energy = validatedReading(pzem.energy(), 0.0f, PZEM_MAX_ENERGY);  // kWh, published unchanged
     data.frequency = validatedReading(pzem.frequency(), 45.0f, PZEM_MAX_FREQUENCY);
     data.pf = validatedReading(pzem.pf(), 0.0f, PZEM_MAX_POWER_FACTOR);
     data.connected = std::isfinite(data.voltage) &&
