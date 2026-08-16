@@ -21,7 +21,7 @@ exact SHAs).
 | `command-protocol.md` | Flutter -> RTDB -> Master command schema | `firebas*.rules`, `firebase_command_router.cpp`, `firebase_room_device_data_source.dart` |
 | `espnow-protocol.md` | Master <-> Slave ESP-NOW frame layout | `esp_now_protocol.h`, `esp_now_config.h` |
 | `telemetry-schema.md` | Master -> RTDB / Slave -> Master telemetry paths | `firebase_telemetry.cpp`, `firebase_command_router.cpp` |
-| `firebase-authorization.md` | Firebase Auth custom claims + rules | `firestore.rules`, `database.rules.json`, `device_claim.dart` |
+| `firebase-authorization.md` | Firebase Auth custom claims + rules (two-layer model: product vs security principal) | `firestore.rules`, `database.rules.json`, `device_claim.dart` |
 | `time-and-freshness.md` | Clock authorities, units, freshness windows | `firebase_command_router.cpp`, `database.rules.json` |
 | `shared-dimmer.md` | Shared CH1 dimmer arbitration | `firebase_command_router.cpp`, `room_device_routing.cpp`, `monitoring_repository_impl.dart` |
 
