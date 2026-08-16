@@ -14,6 +14,8 @@ class SensorData {
   factory SensorData.empty() =>
       const SensorData(temperature: 0, humidity: 0, connected: false);
 
+  // NWS/WPC Rothfusz regression (SR 90-23), exact Celsius-domain form.
+  // Units, derivation, and limitations: docs/RESEARCH_PARAMETER_VALIDATION.md
   double get heatIndex {
     if (temperature < 27) return temperature;
     const c1 = -8.78469475556;
@@ -38,6 +40,8 @@ class SensorData {
         c9 * t * t * h * h;
   }
 
+  // PRD-defined thresholds; literature basis and limits:
+  // docs/RESEARCH_PARAMETER_VALIDATION.md
   String get temperatureCategory {
     if (temperature <= 25.7) return 'Dingin';
     if (temperature <= 28.6) return 'Sejuk';
@@ -45,6 +49,8 @@ class SensorData {
     return 'Panas';
   }
 
+  // PRD-defined thresholds; literature basis and limits:
+  // docs/RESEARCH_PARAMETER_VALIDATION.md
   String get humidityCategory {
     if (humidity <= 60.25) return 'Kering';
     if (humidity < 86.62) return 'Normal';
