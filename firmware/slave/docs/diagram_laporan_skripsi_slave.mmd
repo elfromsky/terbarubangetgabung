@@ -1,0 +1,33 @@
+flowchart LR
+    subgraph COMMUNICATION["Komunikasi Antar-Board"]
+        MASTER["ESP32-S3 Master\nfullgabung"]
+        COMMAND["Device command"]
+        RADIO["ESP-NOW"]
+        SLAVE["ESP32-S3 Slave\nfullgabung2"]
+        MASTER --> COMMAND -->|"DeviceCommandPayload"| RADIO --> SLAVE
+    end
+
+    subgraph PROCESSING["Pemrosesan Command Slave"]
+        VALIDATE["Validasi sumber dan isi command"]
+        ROUTE["Routing room dan device"]
+        ERROR["Command ditolak atau gagal"]
+        SLAVE --> VALIDATE
+        VALIDATE -->|"Valid"| ROUTE
+        VALIDATE -->|"Invalid"| ERROR
+    end
+
+    subgraph OUTPUT["Kendali Hardware dan Pelaporan"]
+        RELAY["Relay state-only"]
+        DIMMER["Dimmer perangkat dimmable\nchannel 1 untuk kamar\nchannel 2 untuk dapur"]
+        ACK["ACK dan state report"]
+        PERIODIC["Boot snapshot dan periodic report"]
+        ROUTE --> RELAY
+        ROUTE --> DIMMER
+        RELAY --> ACK
+        DIMMER --> ACK
+        PERIODIC --> ACK
+    end
+
+    ACK -->|"DeviceStatePayload"| RADIO
+    RADIO --> MASTER
+    RADIO -->|"Send failure"| ERROR

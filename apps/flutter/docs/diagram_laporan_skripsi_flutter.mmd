@@ -1,0 +1,46 @@
+flowchart TD
+    subgraph START["Startup Sistem"]
+        A([Mulai]) --> B["Inisialisasi Flutter"]
+        B --> C["Inisialisasi Firebase"]
+        C --> D{"Berhasil?"}
+        D -->|"Tidak"| E["Error startup dan retry"]
+        E --> C
+        D -->|"Ya"| F["MonitoringBloc dan aplikasi siap"]
+    end
+
+    F --> G{"Pilih layanan"}
+
+    subgraph MON["Monitoring"]
+        G -->|"Monitoring"| M1["Pilih kategori"]
+        M1 --> M2["Ambil telemetry dan status dari Firebase"]
+        M2 --> M3["Tampilkan listrik, suhu, kelembapan, dan perangkat"]
+    end
+
+    subgraph HISTORY["Histori"]
+        G -->|"History"| H1["Pilih rentang tanggal"]
+        H1 --> H2["Ambil sensorLogs dari Firestore"]
+        H2 --> H3["Tampilkan grafik telemetry"]
+    end
+
+    subgraph CONTROL["Kendali Perangkat"]
+        G -->|"Control"| C1["Pilih ruangan dan perangkat"]
+        C1 --> C2["Baca state confirmed dari /rooms"]
+        C2 --> C3["Kirim state atau brightness"]
+        C3 --> C4["Tandai command pending"]
+        C4 --> C5["Firebase /commands"]
+        C5 --> C6["fullgabung Master"]
+        C6 -->|"Perangkat lokal"| C7["Relay master"]
+        C6 -->|"Perangkat slave"| C8["ESP-NOW ke fullgabung2 Slave"]
+        C8 --> C9["Relay atau dimmer slave"]
+        C7 --> C10["Master menulis /rooms"]
+        C9 --> C11["ACK dan state report ke Master"]
+        C11 --> C10
+        C10 --> C12{"State cocok?"}
+        C12 -->|"Ya"| C13["Tampilkan confirmed"]
+        C12 -->|"Tidak atau timeout"| C14["Rollback dan tampilkan error"]
+    end
+
+    M2 --> FB["Firebase"]
+    H2 --> FB
+    C5 --> FB
+    FB --> M3

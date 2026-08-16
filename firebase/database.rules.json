@@ -1,0 +1,46 @@
+{
+  "rules": {
+    ".read": false,
+    ".write": false,
+    "device": {
+      ".read": "auth != null && (auth.token.owner == true || auth.token.controller == true)",
+      ".write": "auth != null && auth.token.controller == true"
+    },
+    "rooms": {
+      ".read": "auth != null && (auth.token.owner == true || auth.token.controller == true)",
+      ".write": "auth != null && auth.token.controller == true"
+    },
+    "gateway": {
+      ".read": "auth != null && (auth.token.owner == true || auth.token.controller == true)",
+      ".write": "auth != null && auth.token.controller == true"
+    },
+    "commands": {
+      ".read": "auth != null && auth.token.controller == true",
+      "rooms": {
+        "$room": {
+            "tools": {
+            "$device": {
+              ".write": "auth != null && auth.token.owner == true && newData.exists() && (($room == 'teras' && ($device == 'lampu' || $device == 'sanyo')) || ($room == 'lorong' && ($device == 'blower' || $device == 'stop_kontak')) || ($room == 'kamar_1' && ($device == 'lampu' || $device == 'stop_kontak')) || ($room == 'kamar_2' && ($device == 'lampu' || $device == 'stop_kontak')) || ($room == 'dapur' && ($device == 'lampu' || $device == 'blower')))",
+              ".validate": "newData.hasChildren(['state', 'request_id', 'issued_at']) && (((($room == 'kamar_1' || $room == 'kamar_2' || $room == 'dapur') && $device == 'lampu') && newData.hasChild('brightness')) || (!((($room == 'kamar_1' || $room == 'kamar_2' || $room == 'dapur') && $device == 'lampu')) && !newData.hasChild('brightness')))",
+              "state": {
+                ".validate": "newData.isBoolean()"
+              },
+              "brightness": {
+                ".validate": "newData.isNumber() && newData.val() % 1 == 0 && newData.val() >= 0 && newData.val() <= 100"
+              },
+              "request_id": {
+                ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 31"
+              },
+              "issued_at": {
+                ".validate": "newData.isNumber() && newData.val() >= now - 15000 && newData.val() <= now + 5000"
+              },
+              "$other": {
+                ".validate": false
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

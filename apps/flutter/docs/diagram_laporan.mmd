@@ -1,0 +1,64 @@
+flowchart TD
+    subgraph START["Memulai Aplikasi"]
+        A([Mulai]) --> B["Inisialisasi Flutter"]
+        B --> C["FirebaseBootstrap"]
+        C --> D{"Firebase berhasil?"}
+        D -->|"Tidak"| E["Tampilkan error startup"]
+        E --> F["Coba lagi"]
+        F --> C
+        D -->|"Ya"| G["Jalankan aplikasi ESH"]
+    end
+
+    G --> H{"Pilih menu"}
+    H -->|"Monitor"| MON["Monitoring"]
+    H -->|"History"| HIS["History"]
+    H -->|"Control"| CON["Control"]
+
+    subgraph MONITORING["Monitoring"]
+        MON --> M1{"Pilih kategori"}
+        M1 -->|"Listrik"| M2["Tampilkan tegangan, arus, daya, energi"]
+        M1 -->|"Suhu dan kelembapan"| M3["Tampilkan suhu, kelembapan, heat index"]
+        M1 -->|"Alat elektronik"| M4["Tampilkan status dari /rooms"]
+        M2 --> M5["Baca RTDB /device/sensorData"]
+        M3 --> M5
+        M4 --> M6["Baca RTDB /rooms"]
+    end
+
+    subgraph HISTORY["History"]
+        HIS --> H1["Pilih rentang tanggal"]
+        H1 --> H2["Query Firestore sensorLogs"]
+        H2 --> H3["Filter timestamp dan limit"]
+        H3 --> H4{"Data tersedia?"}
+        H4 -->|"Tidak"| H5["Tampilkan data kosong"]
+        H4 -->|"Ya"| H6["Tampilkan grafik listrik atau suhu"]
+    end
+
+    subgraph CONTROL["Control"]
+        CON --> C1["Pilih ruangan dan perangkat"]
+        C1 --> C2["Baca status terkonfirmasi dari /rooms"]
+        C2 --> C3{"Perangkat dimmable?"}
+        C3 -->|"Tidak"| C4["Konfirmasi ON atau OFF"]
+        C3 -->|"Ya"| C5["Pilih ON, OFF, atau brightness"]
+        C4 --> C6["Tandai pending"]
+        C5 --> C6
+        C6 --> C7["Tulis /commands/rooms/<room>/<device>"]
+        C7 --> C8["Master memproses command"]
+        C8 --> C9{"State /rooms terkonfirmasi?"}
+        C9 -->|"Ya"| C10["Tampilkan state confirmed"]
+        C9 -->|"Tidak atau timeout"| C11["Rollback dan tampilkan error perangkat"]
+    end
+
+    subgraph SYSTEM["Boundary Sistem Perangkat"]
+        MASTER["fullgabung\nESP32-S3 Master"]
+        SLAVE["fullgabung2\nESP32-S3 Slave"]
+        ACTUATOR["Relay atau dimmer"]
+        MASTER -->|"Perangkat lokal"| ACTUATOR
+        MASTER -->|"ESP-NOW"| SLAVE --> ACTUATOR
+        SLAVE -->|"ACK dan state report"| MASTER
+    end
+
+    M5 --> M7["Monitoring ditampilkan"]
+    M6 --> M7
+    M7 --> M8["Status koneksi Firebase"]
+    C7 --> MASTER
+    MASTER --> C9

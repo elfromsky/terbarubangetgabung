@@ -1,0 +1,56 @@
+name: Firmware CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  credential-hygiene:
+    name: Credential hygiene
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check no tracked credentials or private keys
+        run: bash scripts/ci/check-credential-hygiene.sh
+
+  build-master:
+    name: Build Master (synthetic provisioning)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install PlatformIO
+        run: python -m pip install --upgrade platformio
+
+      - name: Generate synthetic provisioning
+        run: bash scripts/ci/prepare-synthetic-provisioning.sh master firmware/master
+
+      - name: Build Master firmware (compile only)
+        working-directory: firmware/master
+        run: pio run -e esp32-s3-devkitc-1
+
+  build-slave:
+    name: Build Slave (synthetic provisioning)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install PlatformIO
+        run: python -m pip install --upgrade platformio
+
+      - name: Generate synthetic provisioning
+        run: bash scripts/ci/prepare-synthetic-provisioning.sh slave firmware/slave
+
+      - name: Build Slave firmware (compile only)
+        working-directory: firmware/slave
+        run: pio run -e esp32-s3-devkitc-1

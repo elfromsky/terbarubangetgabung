@@ -1,0 +1,33 @@
+name: Firebase Rules CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  rules-emulator:
+    name: Firebase Rules emulator tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: rules-tests/package-lock.json
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Install Rules test dependencies
+        working-directory: rules-tests
+        run: npm ci
+
+      - name: Run Firebase Rules emulator tests
+        working-directory: rules-tests
+        run: npm run test:emulator

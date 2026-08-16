@@ -1,0 +1,111 @@
+flowchart TD
+    subgraph BOOT["Boot Sequence: src/main.cpp"]
+        SERIAL["Serial.begin(115200)\ndelay 1500 ms"]
+        RELAY_INIT["initRelays()\nlogical OFF = GPIO HIGH"]
+        DIMMER_INIT["initializeDimmers()"]
+        ESPNOW_INIT["initEspNow()\nSTA mode, peer master, callback"]
+        SNAPSHOT["Boot snapshot\n1 state packet per route"]
+        READY["System Ready"]
+        SERIAL --> RELAY_INIT --> DIMMER_INIT --> ESPNOW_INIT --> SNAPSHOT --> READY
+    end
+
+    subgraph CALLBACK["ESP-NOW Receive Callback"]
+        RECEIVE["onReceiveData()"]
+        NULL_CHECK{"MAC dan data valid?"}
+        MAC_CHECK{"MAC == MASTER_MAC?"}
+        LENGTH_CHECK{"Length == 92 byte?"}
+        TYPE_CHECK{"Type == DEVICE_COMMAND?"}
+        COPY["Copy payload dan null-terminate strings"]
+        CRC_CHECK{"CRC valid?"}
+        DROP["Drop packet tanpa ACK"]
+        CRC_LOG["Log Invalid CRC"]
+        RECEIVE --> NULL_CHECK
+        NULL_CHECK -->|"Tidak"| DROP
+        NULL_CHECK -->|"Ya"| MAC_CHECK
+        MAC_CHECK -->|"Tidak"| DROP
+        MAC_CHECK -->|"Ya"| LENGTH_CHECK
+        LENGTH_CHECK -->|"Tidak"| DROP
+        LENGTH_CHECK -->|"Ya"| TYPE_CHECK
+        TYPE_CHECK -->|"Tidak"| DROP
+        TYPE_CHECK -->|"Ya"| COPY --> CRC_CHECK
+        CRC_CHECK -->|"Tidak"| CRC_LOG --> DROP
+    end
+
+    subgraph SLOT["Command Buffer"]
+        PENDING_SLOT["Single pending slot\nreceivedCommand + commandPending"]
+        GET["getReceivedCommand()"]
+        CLEAR["setCommandPending(false)"]
+        CRC_CHECK -->|"Ya"| PENDING_SLOT
+        PENDING_SLOT --> GET --> CLEAR
+    end
+
+    subgraph ROUTING["Command Routing: room_device_routing.cpp"]
+        DUPLICATE{"Duplicate cache hit?"}
+        DUP_RESULT["Reuse cached result"]
+        LOOKUP{"Route ditemukan?"}
+        UNKNOWN["Error ACK\nUNKNOWN_DEVICE"]
+        STATE_CHECK{"State OFF atau ON?"}
+        STATE_ERROR["Error ACK\nINVALID_STATE"]
+        BRIGHTNESS_CHECK{"Brightness 0..100?"}
+        BRIGHTNESS_ERROR["Error ACK\nINVALID_BRIGHTNESS"]
+        NORMALIZE["Normalize state dan brightness"]
+        HARDWARE["Apply hardware"]
+        DUPLICATE -->|"Ya"| DUP_RESULT
+        DUPLICATE -->|"Tidak"| LOOKUP
+        LOOKUP -->|"Tidak"| UNKNOWN
+        LOOKUP -->|"Ya"| STATE_CHECK
+        STATE_CHECK -->|"Tidak"| STATE_ERROR
+        STATE_CHECK -->|"Ya"| BRIGHTNESS_CHECK
+        BRIGHTNESS_CHECK -->|"Tidak"| BRIGHTNESS_ERROR
+        BRIGHTNESS_CHECK -->|"Ya"| NORMALIZE --> HARDWARE
+    end
+
+    subgraph HARDWARE["Relay dan Dimmer Hardware"]
+        RELAY_APPLY["setRelayState(relayId, state)\nON LOW, OFF HIGH"]
+        DIMMER_CHECK{"Dimmable route?"}
+        DIMMER_ON["setDimmerBrightness(channel, brightness)"]
+        DIMMER_OFF["Set brightness 0 jika\ntidak ada relay shared aktif"]
+        ROUTE_TABLE["Route table"]
+        CH1["Dimmer channel 1\nkamar_1/lampu relay 4\nkamar_2/lampu relay 6\nGPIO 13 shared"]
+        CH2["Dimmer channel 2\ndapur/lampu relay 7\nGPIO 12"]
+        STATE_ONLY["State-only relay\nlorong, stop_kontak, blower"]
+        HARDWARE --> RELAY_APPLY --> DIMMER_CHECK
+        DIMMER_CHECK -->|"ON"| DIMMER_ON
+        DIMMER_CHECK -->|"OFF"| DIMMER_OFF
+        ROUTE_TABLE --> CH1
+        ROUTE_TABLE --> CH2
+        ROUTE_TABLE --> STATE_ONLY
+    end
+
+    subgraph ACK["ACK dan State Report"]
+        SUCCESS["Success result"]
+        ACK_PAYLOAD["DeviceStatePayload 98 byte\nstate, brightness, requestId, success, errorCode, timestamp, CRC"]
+        SEND["sendStateToMaster()"]
+        SEND_RESULT{"esp_now_send() berhasil?"}
+        SEND_ERROR["Log send failure\ntanpa retry"]
+        SUCCESS --> ACK_PAYLOAD --> SEND --> SEND_RESULT
+        SEND_RESULT -->|"Tidak"| SEND_ERROR
+    end
+
+    subgraph PERIODIC["Periodic Report"]
+        TIMER{"5000 ms elapsed?"}
+        ITERATE["Iterate route table"]
+        BUILD["buildPeriodicStateForDevice()"]
+        REPORT["State report\nrequestId kosong"]
+        TIMER -->|"Ya"| ITERATE --> BUILD --> REPORT --> SEND
+        TIMER -->|"Tidak"| DELAY["delay(50 ms)"]
+    end
+
+    READY --> MAIN["loop()"]
+    MAIN --> GET
+    CLEAR --> APPLY["applyDeviceCommand()"]
+    APPLY --> DUPLICATE
+    DUP_RESULT --> ACK_PAYLOAD
+    UNKNOWN --> ACK_PAYLOAD
+    STATE_ERROR --> ACK_PAYLOAD
+    BRIGHTNESS_ERROR --> ACK_PAYLOAD
+    HARDWARE --> SUCCESS
+    MAIN --> TIMER
+    REPORT --> SEND
+    SEND_ERROR --> DELAY
+    DELAY --> MAIN
