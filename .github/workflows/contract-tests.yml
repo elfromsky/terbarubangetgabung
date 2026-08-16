@@ -25,3 +25,6 @@ jobs:
 
       - name: Issue #19 energy-unit contract tests
         run: python tools/energy_unit_contract_tests.py
+
+      - name: Issue #22 cross-component protocol invariant tests
+        run: python tools/contract_tests.py

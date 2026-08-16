@@ -31,3 +31,20 @@ A contract change is a coordinated change: the same pull request should update
 the producers, the consumers, the Firebase rules, these contract documents, and
 the corresponding tests together. One Git revision should represent one
 coordinated system revision.
+
+## Executable enforcement
+
+These documents are backed by deterministic, source-reading tests that run in
+CI so that drift is caught automatically rather than by documentation review:
+
+```bash
+python tools/contract_tests.py            # cross-component protocol invariants (Issue #22)
+python tools/evidence_gaps_tests.py       # freshness boundaries + shared-dimmer mirror
+python tools/duplicate_cache_tests.py     # Slave duplicate cache (Issue #7)
+python tools/energy_unit_contract_tests.py  # energy wire unit (Issue #19)
+```
+
+`tools/contract_tests.py` compares the identifiers, command schema, timestamps,
+ESP-NOW ABI, and telemetry fields/units extracted from the real sources. A
+single-component change that violates an invariant fails with a diagnostic
+naming the exact disagreement.
