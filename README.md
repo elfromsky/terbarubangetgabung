@@ -80,9 +80,19 @@ npm run test:emulator
 ### Deterministic contract tests
 
 ```bash
-python tools/evidence_gaps_tests.py
-python tools/duplicate_cache_tests.py
+python tools/contract_tests.py          # cross-component protocol invariants (Issue #22)
+python tools/evidence_gaps_tests.py     # freshness boundaries + shared-dimmer mirror
+python tools/duplicate_cache_tests.py   # Slave payload-aware duplicate cache (Issue #7)
+python tools/energy_unit_contract_tests.py  # energy wire unit (Issue #19)
 ```
+
+`tools/contract_tests.py` is the executable cross-component gate: it reads the
+actual Flutter, Firebase rules, Master, and Slave sources and asserts that the
+room/device identifiers, command schema, `request_id`/`issued_at` contract,
+timestamp units, freshness bounds, ESP-NOW message IDs/struct ABI, shared-dimmer
+channels, and telemetry field names/units all agree. A change to only one
+component that breaks one of these invariants fails CI with a diagnostic naming
+the exact disagreement.
 
 ## Contracts
 
