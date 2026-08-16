@@ -35,11 +35,32 @@ Authoritative source: `firmware/master/src/firebase_telemetry.cpp` and
 | `voltage` | number | V | 1 decimal; `null` if unavailable |
 | `current` | number | A | 2 decimals; `null` if unavailable |
 | `power` | number | W | 1 decimal; `null` if unavailable |
-| `energy` | number | Wh | 3 decimals; `null` if unavailable |
+| `energy` | number | kWh | 3 decimals; `null` if unavailable |
 | `frequency` | number | Hz | 1 decimal; `null` if unavailable |
 | `pf` | number | — | power factor, 2 decimals; `null` if unavailable |
 | `connected` | bool | — | `true` only if PZEM connected and `sampled_at > 0` |
 | `sampled_at` | int64 | epoch **seconds** | `null` when not connected |
+
+### `power.energy` unit — kWh (authoritative)
+
+`energy` is **kWh**, not Wh.
+
+The PZEM-004T-v30 device's raw energy register (`REG_ENERGY_L`/`REG_ENERGY_H`)
+has a resolution of 1 Wh, but the pinned `mandulaj/PZEM-004T-v30@1.1.2`
+library already divides that raw register value by 1000 and returns kWh from
+`PZEM004Tv30::energy()`:
+
+```cpp
+// PZEM004Tv30.cpp (v1.1.2), updateValues()
+_currentValues.energy = ((uint32_t)response[13] << 8 |  // Raw Energy in 1Wh
+                         (uint32_t)response[14] |
+                         (uint32_t)response[15] << 24 |
+                         (uint32_t)response[16] << 16) / 1000.0;
+```
+
+Master publishes that library value **unchanged**; Flutter consumes it **as kWh**
+for display, cost, emission, and history. No additional Wh→kWh conversion exists
+or is required anywhere in the runtime path.
 
 ## `system` object
 
@@ -76,6 +97,11 @@ The Flutter application writes history records to Firestore `sensorLogs`:
 | `power` | map | snapshot of power fields |
 | `environment` | map | snapshot of environment fields |
 | `derived` | map (optional) | estimated cost/emission |
+
+`power.energy` inside `sensorLogs` carries the same **kWh** value as the RTDB
+`power.energy` field above (the Flutter owner writes the domain value unchanged).
+`derived.estimatedCost` and `derived.estimatedEmission` are computed from that
+kWh value.
 
 ## Clock authority summary
 

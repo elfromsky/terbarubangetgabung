@@ -35,5 +35,5 @@ class McbDataCollection {
 
   double get totalCurrent => mcb1.current;
   double get totalPower => mcb1.power;
-  double get totalEnergy => mcb1.energy;
+  double get totalEnergy => mcb1.energy; // kWh
 }

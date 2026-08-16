@@ -3,7 +3,7 @@ class McbData {
   final double voltage;
   final double current;
   final double power;
-  final double energy;
+  final double energy; // kWh
   final int lastUpdate;
   final int? sampledAtEpochSeconds;
 

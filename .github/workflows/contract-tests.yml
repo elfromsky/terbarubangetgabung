@@ -22,3 +22,6 @@ jobs:
 
       - name: Issue #7 payload-aware duplicate-cache tests
         run: python tools/duplicate_cache_tests.py
+
+      - name: Issue #19 energy-unit contract tests
+        run: python tools/energy_unit_contract_tests.py

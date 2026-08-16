@@ -11,7 +11,7 @@ struct PzemData {
   float voltage;
   float current;
   float power;
-  float energy;
+  float energy;  // kWh (PZEM004Tv30::energy() already converts the 1-Wh register to kWh)
   float frequency;
   float pf;
   bool connected;
