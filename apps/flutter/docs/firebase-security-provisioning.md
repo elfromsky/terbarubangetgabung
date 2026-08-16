@@ -12,10 +12,16 @@ placeholders and all secrets stay outside the repository.
 | `owner: true` | Read telemetry/state, **write commands** (`/commands`), read Firestore history, **create Firestore `sensorLogs`** | Each approved Flutter application installation |
 | `controller: true` | **Write** telemetry/state (`/device`, `/rooms`, `/gateway`), read commands, read Firestore history | The ESP32 Master Firebase Authentication user |
 
-The Flutter bootstrap gate (`hasTrustedDeviceClaim`) trusts an identity that
-holds **either** `owner: true` **or** `controller: true`. Both are valid at the
-same time, and a single identity may hold both, but the intended model is one
-role per identity:
+The Flutter bootstrap gate (`hasOwnerClaim`) authorizes the operational
+application only when the identity holds `owner: true`. `controller: true` by
+itself does **not** unlock the Flutter app: the Flutter client must write
+`/commands` and create Firestore `sensorLogs`, both of which the rules reserve
+for `owner`. The broader `hasTrustedDeviceClaim` predicate (owner **or**
+controller) remains the general "trusted principal" contract used by the
+security rules, not the Flutter app gate.
+
+Both claims are valid at the same time, and a single identity may hold both,
+but the intended model is one role per identity:
 
 - Flutter device → `owner` (so it may write `/commands`).
 - ESP32 Master → `controller` (so it may write reported state and telemetry).

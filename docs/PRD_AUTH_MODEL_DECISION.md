@@ -119,8 +119,9 @@ contract and the current implementation status.
 
 ## 7. Implementation status
 
-The model above is the authoritative target. The current `main` branch does not
-yet wire the Flutter anonymous-sign-in + claim-validation bootstrap into the
-Flutter runtime; the Flutter runtime restoration is tracked separately by Issue
-#17 (<https://github.com/elfromsky/terbarubangetgabung/issues/17>). Issue #18
-documents the model and does not implement the runtime bootstrap.
+The model above is the authoritative target. Issue #17
+(<https://github.com/elfromsky/terbarubangetgabung/issues/17>) wires the
+Flutter anonymous-sign-in + owner-claim bootstrap into the Flutter runtime:
+`apps/flutter/lib/main.dart` runs an authorization gate (`AuthGateController`
++ `FirebaseClaims`) before constructing the operational app. Issue #18
+documents the model; the runtime bootstrap is implemented by Issue #17.

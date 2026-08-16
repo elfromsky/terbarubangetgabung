@@ -52,6 +52,54 @@ void main() {
     });
   });
 
+  group('hasOwnerClaim', () {
+    test('accepts owner true', () {
+      expect(hasOwnerClaim(const {'owner': true}), isTrue);
+    });
+
+    test('accepts owner true even when controller is also true', () {
+      expect(hasOwnerClaim(const {'owner': true, 'controller': true}), isTrue);
+    });
+
+    test('rejects controller true without owner (Flutter gate)', () {
+      expect(hasOwnerClaim(const {'controller': true}), isFalse);
+    });
+
+    test('rejects owner false with controller true (Flutter gate)', () {
+      expect(
+        hasOwnerClaim(const {'owner': false, 'controller': true}),
+        isFalse,
+      );
+    });
+
+    test('rejects null and empty claims', () {
+      expect(hasOwnerClaim(null), isFalse);
+      expect(hasOwnerClaim(const <String, dynamic>{}), isFalse);
+    });
+
+    test('fails closed on malformed or unexpected claim values', () {
+      expect(hasOwnerClaim(const {'owner': 'yes'}), isFalse);
+      expect(hasOwnerClaim(const {'owner': 1}), isFalse);
+      expect(hasOwnerClaim(const {'owner': 'true'}), isFalse);
+      expect(hasOwnerClaim(const {'owner': null}), isFalse);
+      expect(hasOwnerClaim(const {'owner': '1'}), isFalse);
+    });
+  });
+
+  group('owner vs controller (Issue #18)', () {
+    test('controller true alone never unlocks the Flutter application', () {
+      expect(hasOwnerClaim(const {'controller': true}), isFalse);
+      expect(
+        hasOwnerClaim(const {'owner': false, 'controller': true}),
+        isFalse,
+      );
+    });
+
+    test('owner true unlocks the Flutter application', () {
+      expect(hasOwnerClaim(const {'owner': true}), isTrue);
+    });
+  });
+
   group('revalidateTrust', () {
     test('returns null (keep current) when claims cannot be loaded', () {
       expect(revalidateTrust(null), isNull);

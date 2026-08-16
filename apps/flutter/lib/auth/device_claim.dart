@@ -14,6 +14,20 @@ bool hasTrustedDeviceClaim(Map<String, dynamic>? claims) {
   return claims?['owner'] == true || claims?['controller'] == true;
 }
 
+/// Whether a Firebase identity is authorized to run the Flutter household
+/// application.
+///
+/// The Flutter app must be able to read telemetry AND write `/commands` AND
+/// create Firestore `sensorLogs`. The rules reserve command writes and
+/// `sensorLogs` creation for `owner` alone, so `controller == true` by itself
+/// is NOT sufficient to unlock the operational app.
+///
+/// Any other value (a missing claim, `false`, or a non-boolean value) is
+/// rejected, so authorization fails closed by construction.
+bool hasOwnerClaim(Map<String, dynamic>? claims) {
+  return claims?['owner'] == true;
+}
+
 /// The result of a successful claim (re-)evaluation.
 enum DeviceTrust { trusted, untrusted }
 
