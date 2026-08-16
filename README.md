@@ -84,6 +84,7 @@ python tools/contract_tests.py          # cross-component protocol invariants (I
 python tools/evidence_gaps_tests.py     # freshness boundaries + shared-dimmer mirror
 python tools/duplicate_cache_tests.py   # Slave payload-aware duplicate cache (Issue #7)
 python tools/energy_unit_contract_tests.py  # energy wire unit (Issue #19)
+python tools/command_lifecycle_e2e_tests.py  # full command lifecycle simulation (Issue #23)
 ```
 
 `tools/contract_tests.py` is the executable cross-component gate: it reads the

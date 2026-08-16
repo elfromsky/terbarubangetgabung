@@ -28,3 +28,6 @@ jobs:
 
       - name: Issue #22 cross-component protocol invariant tests
         run: python tools/contract_tests.py
+
+      - name: Issue #23 command lifecycle E2E simulation
+        run: python tools/command_lifecycle_e2e_tests.py
