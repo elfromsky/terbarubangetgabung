@@ -1,0 +1,13 @@
+{
+  "name": "esh-integration-harness",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Firebase emulator-backed Flutter integration harness (Issue #24): provisions the owner/controller test principal for the Android-emulator Flutter integration suite.",
+  "scripts": {
+    "provision": "node provision_owner.js"
+  },
+  "devDependencies": {
+    "firebase-admin": "^12.4.0",
+    "firebase-tools": "^14.7.0"
+  }
+}
