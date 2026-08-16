@@ -289,6 +289,62 @@ describe("RTDB commands rules", () => {
   });
 });
 
+describe("RTDB telemetry read rules", () => {
+  async function seedTelemetry() {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      const db = ctx.database();
+      await set(ref(db, "device"), { mcb: { status: "on" } });
+      await set(ref(db, "rooms/dapur/tools/lampu"), { state: true });
+      await set(ref(db, "gateway/connected"), true);
+      await set(ref(db, "commands/rooms/dapur/tools/lampu"), {
+        state: true,
+        request_id: "req-read",
+        issued_at: Date.now(),
+      });
+    });
+  }
+
+  test("owner can read device, rooms, and gateway", async () => {
+    await seedTelemetry();
+    const ctx = testEnv.authenticatedContext("owner-read", makeToken(true, false));
+    const db = ctx.database();
+    await assertSucceeds(get(ref(db, "device")));
+    await assertSucceeds(get(ref(db, "rooms")));
+    await assertSucceeds(get(ref(db, "gateway")));
+  });
+
+  test("controller can read device, rooms, and gateway", async () => {
+    await seedTelemetry();
+    const ctx = testEnv.authenticatedContext("controller-read", makeToken(false, true));
+    const db = ctx.database();
+    await assertSucceeds(get(ref(db, "device")));
+    await assertSucceeds(get(ref(db, "rooms")));
+    await assertSucceeds(get(ref(db, "gateway")));
+  });
+
+  test("unauthenticated user cannot read telemetry", async () => {
+    await seedTelemetry();
+    const ctx = testEnv.unauthenticatedContext();
+    const db = ctx.database();
+    await assertFails(get(ref(db, "device")));
+    await assertFails(get(ref(db, "rooms")));
+    await assertFails(get(ref(db, "gateway")));
+  });
+
+  test("authenticated user with no claim cannot read telemetry", async () => {
+    await seedTelemetry();
+    const ctx = testEnv.authenticatedContext("no-claim-read", makeToken(false, false));
+    const db = ctx.database();
+    await assertFails(get(ref(db, "device")));
+  });
+
+  test("owner cannot read commands (commands read is controller-only)", async () => {
+    await seedTelemetry();
+    const ctx = testEnv.authenticatedContext("owner-read-cmd", makeToken(true, false));
+    await assertFails(get(ref(ctx.database(), "commands")));
+  });
+});
+
 describe("RTDB command issued_at freshness boundaries", () => {
   // Reference: database.rules.json
   //   "issued_at": ".validate": "newData.isNumber() &&

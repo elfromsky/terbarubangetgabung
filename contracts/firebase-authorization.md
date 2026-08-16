@@ -54,6 +54,13 @@ A principal is trusted when its ID token carries `owner == true` or
 `controller == true` (`hasTrustedDeviceClaim`). Any other value — a missing
 claim, `false`, or a non-boolean — fails closed.
 
+The Flutter household application gate is stricter: it requires
+`owner == true` (`hasOwnerClaim`). `controller == true` alone does not unlock
+the Flutter app, because the Flutter client must write `/commands` and create
+Firestore `sensorLogs`, both reserved for `owner`. `controller` remains a valid
+security principal for the Master/controller device, but must not become
+equivalent to full Flutter owner access.
+
 `owner` and `controller` are **not** household-user roles, not three-user RBAC,
 and not human account types. They authorize the trusted Flutter client
 installations and the Master/controller device identity respectively.
@@ -184,18 +191,19 @@ today.
 
 - The authoritative/target security model is described above.
 - `device_claim.dart` defines pure claim evaluation (`hasTrustedDeviceClaim`,
-  `revalidateTrust`) so the trust decision is unit-testable without a live
-  backend. It is currently referenced only by tests, not by the runtime path.
-- `apps/flutter/lib/main.dart` initializes Firebase and renders the app, but
-  does not currently call `FirebaseAuth`, `signInAnonymously`, or
-  `getIdTokenResult`, and has no client-side claim gate. Historical note: the
+  `hasOwnerClaim`, `revalidateTrust`) so the trust decision is unit-testable
+  without a live backend.
+- `apps/flutter/lib/main.dart` runs an authorization bootstrap gate
+  (`AuthGateController` + `FirebaseClaims`) before constructing `EshApp`:
+  anonymous sign-in, owner-claim verification, fail-closed startup, an
+  enrollment state for unprovisioned identities, forced token refresh on
+  `Coba lagi` and on foreground/resume, and owner-specific (not
+  controller-or-owner) gating of the operational app. Historical note: the
   anonymous-auth bootstrap that previously existed (commit `369fb82`, Issue #5
   / PR #10) was removed later (commit `8b9346e`, the pre-migration `clean`
   tip), and the Issue #8 monorepo migration imported the Flutter tree without
-  restoring it.
-- Restoring/wiring the Flutter bootstrap (anonymous sign-in, claim validation,
-  fail-closed enrollment state) is tracked by Issue #17 and is **not**
-  implemented in this document.
+  restoring it. Issue #17 restores the runtime bootstrap consistent with this
+  contract.
 
 > Do not change `owner`/`controller` claim semantics as part of any migration;
 > the strict-boolean security-principal contract is settled.
