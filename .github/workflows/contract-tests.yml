@@ -1,0 +1,24 @@
+name: Contract Tests CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  deterministic:
+    name: Deterministic contract tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Evidence-gap / freshness / shared-dimmer mirror tests
+        run: python tools/evidence_gaps_tests.py
+
+      - name: Issue #7 payload-aware duplicate-cache tests
+        run: python tools/duplicate_cache_tests.py

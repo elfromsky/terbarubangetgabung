@@ -1,0 +1,34 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isOwner() {
+      return request.auth != null && request.auth.token.owner == true;
+    }
+
+    function isController() {
+      return request.auth != null && request.auth.token.controller == true;
+    }
+
+    match /sensorLogs/{document} {
+      allow read: if isOwner() || isController();
+      allow create: if isOwner()
+                    && request.resource.data.keys().hasOnly([
+                      'timestamp', 'power', 'environment', 'derived'
+                    ])
+                    && request.resource.data.keys().hasAll([
+                      'timestamp', 'power', 'environment'
+                    ])
+                    && request.resource.data.timestamp is timestamp
+                    && request.resource.data.power is map
+                    && request.resource.data.environment is map
+                    && (!request.resource.data.keys().hasAny(['derived'])
+                        || request.resource.data.derived is map);
+      allow update, delete: if false;
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

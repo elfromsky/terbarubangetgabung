@@ -1,0 +1,17 @@
+#ifndef ESP_NOW_KEYS_LOCAL_H
+#define ESP_NOW_KEYS_LOCAL_H
+
+// Copy to esp_now_keys.local.h. Replace both placeholders with independently
+// generated random bytes, install matching keys on both devices, then remove
+// the error below. Never commit or log local key values.
+#error "Replace placeholder ESP-NOW keys before building"
+
+#define ESPNOW_PMK_BYTES \
+    { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, \
+      0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }
+
+#define ESPNOW_LMK_BYTES \
+    { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, \
+      0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }
+
+#endif

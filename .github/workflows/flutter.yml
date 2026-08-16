@@ -1,0 +1,36 @@
+name: Flutter CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  flutter:
+    name: Analyze, test, and build Flutter
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: "3.44.8"
+          cache: true
+
+      - name: Install dependencies
+        working-directory: apps/flutter
+        run: flutter pub get
+
+      - name: Static analysis
+        working-directory: apps/flutter
+        run: flutter analyze
+
+      - name: Run tests
+        working-directory: apps/flutter
+        run: flutter test
+
+      - name: Build debug APK
+        working-directory: apps/flutter
+        run: flutter build apk --debug
