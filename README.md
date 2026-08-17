@@ -53,6 +53,23 @@ flutter test
 flutter build apk --debug
 ```
 
+### Flutter integration (Firebase emulator-backed, Issue #24)
+
+Runs on an Android emulator against the Firebase Auth + Realtime Database
+emulators and exercises FR-18..FR-28 (heartbeat freshness, module-offline `#`
+rendering, command suppression, last-state retention). See
+`docs/testing/FR18-FR28-INTEGRATION.md` for the traceability matrix.
+
+```bash
+cd integration-tests && npm ci
+# from the repo root, with an Android emulator running:
+firebase emulators:exec \
+  --config firebase/firebase.json \
+  --only auth,database \
+  --project esh-integration-test \
+  "node integration-tests/provision_owner.js && cd apps/flutter && flutter test integration_test --dart-define=ESH_INTEGRATION=true --dart-define=ESH_EMULATOR_HOST=10.0.2.2"
+```
+
 ### Master firmware
 
 ```bash

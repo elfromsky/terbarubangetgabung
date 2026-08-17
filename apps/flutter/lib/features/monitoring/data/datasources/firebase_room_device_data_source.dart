@@ -120,10 +120,15 @@ class FirebaseRoomDeviceDataSource implements RoomDeviceDataSource {
   @override
   Future<void> controlRoomDevices(List<RoomDeviceCommandDto> commands) async {
     try {
-      final offsetSnapshot = await database
+      // `.info/` server paths support streaming reads only: a one-time
+      // `.get()` on `.info/serverTimeOffset` is rejected ("Invalid token in
+      // path"). Read the offset through the same streaming mechanism used for
+      // `.info/connected`.
+      final offsetEvent = await database
           .child('.info/serverTimeOffset')
-          .get();
-      final offsetValue = offsetSnapshot.value;
+          .onValue
+          .first;
+      final offsetValue = offsetEvent.snapshot.value;
       if (offsetValue is! num) {
         throw StateError('Firebase server time offset is unavailable');
       }
