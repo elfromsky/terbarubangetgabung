@@ -136,6 +136,38 @@ void main() {
     await setUpEmulatorFirebase();
   });
 
+  testWidgets('emulator serverTimeOffset/connected diagnostics', (tester) async {
+    final viaGet = await emulatorDatabase.ref('.info/serverTimeOffset').get();
+    debugPrint(
+      'ESH_DIAG serverTimeOffset .get() = ${viaGet.value} '
+      '(${viaGet.value.runtimeType})',
+    );
+    final viaGetConnected = await emulatorDatabase.ref('.info/connected').get();
+    debugPrint(
+      'ESH_DIAG connected .get() = ${viaGetConnected.value}',
+    );
+
+    final completer = Completer<Object?>();
+    final sub = emulatorDatabase
+        .ref('.info/serverTimeOffset')
+        .onValue
+        .listen((event) {
+          debugPrint('ESH_DIAG serverTimeOffset .onValue = ${event.snapshot.value}');
+          if (!completer.isCompleted) {
+            completer.complete(event.snapshot.value);
+          }
+        });
+    final value = await completer.future.timeout(
+      const Duration(seconds: 5),
+      onTimeout: () {
+        debugPrint('ESH_DIAG serverTimeOffset .onValue timed out');
+        return null;
+      },
+    );
+    debugPrint('ESH_DIAG serverTimeOffset .onValue final = $value');
+    await sub.cancel();
+  });
+
   group('heartbeat freshness truth table', () {
     Future<MonitoringLoaded> assertEshStatus({
       required int? unixTime,
@@ -459,7 +491,16 @@ void main() {
       await waitForBloc(bloc, (b) => isLoaded(b) && loadedState(b).canControl);
 
       bloc.add(controlEvent(roomKey: 'teras', deviceKey: 'lampu'));
-      await waitForCommand('teras', 'lampu');
+      try {
+        await waitForCommand('teras', 'lampu');
+      } catch (_) {
+        final state = loadedState(bloc);
+        debugPrint(
+          'ESH_DIAG commandErrors=${state.commandErrors} '
+          'pending=${state.pendingDevices} desired=${state.desiredDevices}',
+        );
+        rethrow;
+      }
     });
 
     testWidgets('control intent while heartbeat stale does not write command', (
