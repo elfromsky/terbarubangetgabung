@@ -125,6 +125,21 @@ channels, and telemetry field names/units all agree. A change to only one
 component that breaks one of these invariants fails CI with a diagnostic naming
 the exact disagreement.
 
+### Real-hardware acceptance (Issue #26)
+
+The final acceptance gate separates from deterministic CI. It validates the PRD
+acceptance criteria (real PZEM-004T V/A/W/kWh, XY-MD02/SHT20 temperature/humidity,
+10 relays, 2 RobotDyn AC dimmers, real ESP-NOW, heartbeat/offline behavior, last
+hardware state retention, unit correctness, NFR-01 usability, NFR-03 failure
+safety) on the physical ESH system:
+
+- `docs/testing/HARDWARE_ACCEPTANCE.md` — the reusable acceptance runbook.
+- `docs/testing/HARDWARE_ACCEPTANCE_RESULTS.md` — the specific acceptance run
+  record (tested SHA, preflight results, hardware results).
+
+The physical tests are `BLOCKED` until they are executed against real hardware;
+they must not be marked `PASS` from CI, emulator, or source inspection alone.
+
 ## Contracts
 
 Cross-component interfaces are documented in `contracts/`. See
