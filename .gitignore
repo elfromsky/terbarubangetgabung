@@ -28,6 +28,9 @@ build/
 # Firebase emulator cache
 .firebase/
 
+# Release artifacts (generated manifests/bundles)
+dist/
+
 # OS / editor
 .DS_Store
 *.class
