@@ -5,6 +5,10 @@ Wired into both Master and Slave ``platformio.ini`` via ``extra_scripts`` so the
 coordinated version has a single source of truth (root ``VERSION``) and is never
 copy-pasted into firmware build flags. The hook fails the build if the version
 is missing or malformed (fail closed).
+
+PlatformIO executes ``extra_scripts`` through ``exec(...)`` with the build
+environment exported as ``env``; the script's own ``__file__`` is not available,
+so the repo root is located from ``$PROJECT_DIR`` instead.
 """
 
 from pathlib import Path
@@ -12,10 +16,12 @@ import re
 
 Import("env")  # noqa: F821 -- provided by PlatformIO SCons build environment
 
-REPO_ROOT = Path(__file__).resolve().parent.parent.parent
-VERSION_PATH = REPO_ROOT / "VERSION"
-
 SEMVER_RE = re.compile(r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
+
+# $PROJECT_DIR is the PlatformIO project dir (firmware/master or firmware/slave);
+# the repository root is two levels up.
+project_dir = Path(env.subst("$PROJECT_DIR")).resolve()
+VERSION_PATH = project_dir.parent.parent / "VERSION"
 
 if not VERSION_PATH.exists():
     raise RuntimeError("missing root VERSION file: %s" % VERSION_PATH)
