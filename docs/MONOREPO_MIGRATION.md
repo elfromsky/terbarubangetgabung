@@ -4,9 +4,14 @@ This document records the migration of this repository from a
 branch-as-component model into a coordinated monorepo, and the preservation of
 the legacy histories.
 
-- Issue: <https://github.com/elfromsky/terbarubangetgabung/issues/8>
+- Issue: <https://github.com/elfromsky/esh-smart-home/issues/8>
 - Strategy: normal feature branch from `main`, snapshot import, squash merge.
 - Intentional runtime behavior changes: **zero**.
+
+> Historical note (Issue #21): the repository was originally maintained under
+> the working name `terbarubangetgabung` and was renamed to `esh-smart-home`
+> after the monorepo migration. The URLs in this document use the canonical new
+> name; GitHub redirects the old name.
 
 ## Legacy revision baseline
 

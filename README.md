@@ -4,6 +4,18 @@ A coordinated monorepo for the ESH (e-smart-home) system: a Flutter mobile app,
 an ESP32 Master gateway, an ESP32 Slave device controller, Firebase backend
 rules, and the contracts that bind them together.
 
+## Repository
+
+Canonical repository: <https://github.com/elfromsky/esh-smart-home>
+
+```bash
+git clone https://github.com/elfromsky/esh-smart-home.git
+```
+
+The canonical development branch is `main`. Feature, fix, and repository
+changes branch from `main` and are merged back through pull requests. See
+`docs/DEVELOPMENT.md`.
+
 ## What this system does
 
 ```text
@@ -132,3 +144,7 @@ This repository was migrated (Issue #8) from a branch-as-component model
 coordinated monorepo. The legacy histories are preserved via annotated tags
 `legacy/master-final`, `legacy/slave-final`, `legacy/flutter-final` and the
 read-only branches `slave`/`clean`/`flutter`. See `docs/MONOREPO_MIGRATION.md`.
+
+The repository was originally maintained under the working name
+`terbarubangetgabung` and was renamed to `esh-smart-home` after the monorepo
+migration (Issue #21). GitHub redirects the old URL to the new one.
