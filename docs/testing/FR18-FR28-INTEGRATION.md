@@ -52,6 +52,18 @@ The integration suite signs in with a deterministic email/password principal
 used here only for the legitimate read-back of `/commands` when asserting that
 no command was emitted.
 
+## Transport-loss seam
+
+Firebase "connection available/unavailable" behavior is exercised through a
+narrow connection-status seam (`_ConnectionStatusOverrideRepository`): the
+connection status *only* is injected (the RTDB SDK's `goOffline`/`goOnline`
+does not deterministically re-emit `.info/connected` on the emulator), while
+every other path — telemetry reads, the mapper, command writes, and `/commands`
+read-back — still runs against the real emulator. This is explicitly a
+transport-disconnect *simulation*, not a physical network-outage test. The
+heartbeat/module freshness, `#` rendering, and command-suppression assertions
+all run against real emulator data and are unaffected by this seam.
+
 ## Deterministic clock
 
 Freshness is wall-clock independent: the bloc's `now` clock is pinned to

@@ -360,7 +360,11 @@ void main() {
     testWidgets(
       'Firebase disconnect retains ESH status as stale and blocks control',
       (tester) async {
-        final bloc = buildEmulatorMonitoringBloc();
+        final connectionController = StreamController<bool>.broadcast();
+        addTearDown(connectionController.close);
+        final bloc = buildEmulatorMonitoringBloc(
+          connectionStatus: connectionController.stream,
+        );
         addTearDown(bloc.close);
         await seedSensorData(
           unixTime: fixedNowEpochSeconds,
@@ -369,6 +373,7 @@ void main() {
         );
         await seedSlaveOnline(true);
         await startMonitoring(bloc);
+        connectionController.add(true);
         await waitForBloc(
           bloc,
           (b) =>
@@ -377,7 +382,9 @@ void main() {
               loadedState(b).isConnected,
         );
 
-        await emulatorDatabase.goOffline();
+        // Transport loss (simulated seam) — connection drops, ESH status is
+        // retained as stale, control is blocked.
+        connectionController.add(false);
         await waitForBloc(
           bloc,
           (b) => isLoaded(b) && !loadedState(b).isConnected,
@@ -387,19 +394,17 @@ void main() {
         expect(offline.eshStatus, EshSystemStatus.online);
         expect(offline.isEshStatusStale, isTrue);
         expect(offline.canControl, isFalse);
-
-        await emulatorDatabase.goOnline();
-        await waitForBloc(
-          bloc,
-          (b) => isLoaded(b) && loadedState(b).isConnected,
-        );
       },
     );
 
     testWidgets(
       'control intent while Firebase disconnected does not write command',
       (tester) async {
-        final bloc = buildEmulatorMonitoringBloc();
+        final connectionController = StreamController<bool>.broadcast();
+        addTearDown(connectionController.close);
+        final bloc = buildEmulatorMonitoringBloc(
+          connectionStatus: connectionController.stream,
+        );
         addTearDown(bloc.close);
         await seedSensorData(
           unixTime: fixedNowEpochSeconds,
@@ -409,12 +414,13 @@ void main() {
         await seedRoomDevice(room: 'teras', device: 'sanyo', isOn: false);
         await seedSlaveOnline(true);
         await startMonitoring(bloc);
+        connectionController.add(true);
         await waitForBloc(
           bloc,
           (b) => isLoaded(b) && loadedState(b).isConnected,
         );
 
-        await emulatorDatabase.goOffline();
+        connectionController.add(false);
         await waitForBloc(
           bloc,
           (b) => isLoaded(b) && !loadedState(b).isConnected,
@@ -431,12 +437,6 @@ void main() {
           'Firebase terputus. Perintah tidak dikirim',
         );
         expect(loadedState(bloc).pendingDevices, isEmpty);
-
-        await emulatorDatabase.goOnline();
-        await waitForBloc(
-          bloc,
-          (b) => isLoaded(b) && loadedState(b).isConnected,
-        );
         expect(await commandExists(room: 'teras', device: 'sanyo'), isFalse);
       },
     );
@@ -606,7 +606,11 @@ void main() {
     testWidgets(
       'last confirmed device state is retained through connection loss',
       (tester) async {
-        final bloc = buildEmulatorMonitoringBloc();
+        final connectionController = StreamController<bool>.broadcast();
+        addTearDown(connectionController.close);
+        final bloc = buildEmulatorMonitoringBloc(
+          connectionStatus: connectionController.stream,
+        );
         addTearDown(bloc.close);
         await seedSensorData(
           unixTime: fixedNowEpochSeconds,
@@ -616,6 +620,7 @@ void main() {
         await seedRoomDevice(room: 'teras', device: 'lampu', isOn: true);
         await seedSlaveOnline(true);
         await startMonitoring(bloc);
+        connectionController.add(true);
         await waitForBloc(
           bloc,
           (b) =>
@@ -631,7 +636,7 @@ void main() {
                   true,
         );
 
-        await emulatorDatabase.goOffline();
+        connectionController.add(false);
         await waitForBloc(
           bloc,
           (b) => isLoaded(b) && !loadedState(b).isConnected,

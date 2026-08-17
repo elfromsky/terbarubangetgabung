@@ -4,6 +4,8 @@ import 'package:esh/bloc/monitoring/monitoring_bloc.dart';
 import 'package:esh/features/monitoring/data/datasources/firebase_monitoring_data_source.dart';
 import 'package:esh/features/monitoring/data/datasources/firebase_room_device_data_source.dart';
 import 'package:esh/features/monitoring/data/repositories/monitoring_repository_impl.dart';
+import 'package:esh/features/monitoring/domain/entities/mcb_data_collection.dart';
+import 'package:esh/features/monitoring/domain/entities/room_device_collection.dart';
 import 'package:esh/features/monitoring/domain/repositories/monitoring_repository.dart';
 import 'package:esh/features/monitoring/domain/usecases/control_room_device_use_case.dart';
 import 'package:esh/features/monitoring/domain/usecases/watch_connection_status_use_case.dart';
@@ -147,15 +149,66 @@ class InertTimer implements Timer {
 
 /// Builds a fully production-graph `MonitoringBloc` wired to the emulator RTDB,
 /// with a pinned clock and inert freshness timers for determinism.
-MonitoringBloc buildEmulatorMonitoringBloc() {
+MonitoringBloc buildEmulatorMonitoringBloc({Stream<bool>? connectionStatus}) {
   final database = emulatorDatabase.ref();
   final monitoringDataSource = FirebaseMonitoringDataSource(database: database);
   final roomDeviceDataSource = FirebaseRoomDeviceDataSource(database: database);
-  final repository = MonitoringRepositoryImpl(
+  MonitoringRepository repository = MonitoringRepositoryImpl(
     monitoringDataSource: monitoringDataSource,
     roomDeviceDataSource: roomDeviceDataSource,
   );
+  if (connectionStatus != null) {
+    repository = _ConnectionStatusOverrideRepository(
+      repository,
+      connectionStatus,
+    );
+  }
   return buildMonitoringBlocForRepository(repository);
+}
+
+/// Wraps a repository so its connection-status stream can be driven directly.
+///
+/// This is used only for the *transport-disconnect* scenarios. The Firebase
+/// realtime SDK's `goOffline`/`goOnline` do not deterministically re-emit
+/// `.info/connected` on the emulator, so the connection status — and only the
+/// connection status — is injected through this seam. Every other path
+/// (telemetry reads, command writes, `/commands` read-back) still goes through
+/// the real emulator-backed datasource. This is a *transport-loss simulation*,
+/// not a physical network-outage test.
+class _ConnectionStatusOverrideRepository implements MonitoringRepository {
+  final MonitoringRepository _inner;
+  final Stream<bool> _connectionStatus;
+
+  _ConnectionStatusOverrideRepository(this._inner, this._connectionStatus);
+
+  @override
+  Stream<McbDataCollection> getMonitoringDataStream() =>
+      _inner.getMonitoringDataStream();
+
+  @override
+  Stream<RoomDeviceCollection> getRoomDevicesStream() =>
+      _inner.getRoomDevicesStream();
+
+  @override
+  Stream<bool> getConnectionStatus() => _connectionStatus;
+
+  @override
+  Stream<bool?> getSlaveOnlineStream() => _inner.getSlaveOnlineStream();
+
+  @override
+  Future<void> controlRoomDevice(
+    String roomKey,
+    String deviceKey,
+    bool isOn,
+    int brightness,
+    bool supportsBrightness,
+  ) => _inner.controlRoomDevice(
+    roomKey,
+    deviceKey,
+    isOn,
+    brightness,
+    supportsBrightness,
+  );
 }
 
 /// Builds a `MonitoringBloc` around an arbitrary repository.
