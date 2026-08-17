@@ -1,7 +1,7 @@
 # Coordinated Revision — Final Evidence Report (Issue #2 follow-up)
 
 Generated: 2026-08-15
-Repo: `elfromsky/terbarubangetgabung`
+Repo: `elfromsky/esh-smart-home`
 Scope: close the unresolved build, auth, timing, ESP-NOW, and shared-dimmer proof gaps left by Issue #1.
 
 > Status before this run: `PARTIALLY DIAGNOSED / NOT YET PROVEN DEPLOYABLE`.

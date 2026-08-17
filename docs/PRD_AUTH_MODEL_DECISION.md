@@ -2,7 +2,7 @@
 
 > Authoritative clarification / revision for the PRD v0.1 user/authentication
 > model referenced by Issue #18
-> (<https://github.com/elfromsky/terbarubangetgabung/issues/18>).
+> (<https://github.com/elfromsky/esh-smart-home/issues/18>).
 
 The PRD v0.1 is maintained outside this repository. This document is the
 linked, repository-tracked revision that resolves the ambiguity between the
@@ -120,7 +120,7 @@ contract and the current implementation status.
 ## 7. Implementation status
 
 The model above is the authoritative target. Issue #17
-(<https://github.com/elfromsky/terbarubangetgabung/issues/17>) wires the
+(<https://github.com/elfromsky/esh-smart-home/issues/17>) wires the
 Flutter anonymous-sign-in + owner-claim bootstrap into the Flutter runtime:
 `apps/flutter/lib/main.dart` runs an authorization gate (`AuthGateController`
 + `FirebaseClaims`) before constructing the operational app. Issue #18

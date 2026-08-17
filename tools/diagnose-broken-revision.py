@@ -1,7 +1,7 @@
 ﻿#!/usr/bin/env python3
 """
 Read-only diagnostic runner for the coordinated Flutter/Master/Slave breakage
-described in https://github.com/elfromsky/terbarubangetgabung/issues/1.
+described in https://github.com/elfromsky/esh-smart-home/issues/1.
 
 Extracts committed snapshots of all three components (before and after the
 coordinated revision), verifies repository topology, runs safe/non-destructive
@@ -174,7 +174,7 @@ def main():
         "# Coordinated Revision Diagnostic Report\n\n"
         f"Generated: {datetime.now(timezone.utc).astimezone().strftime('%Y-%m-%d %H:%M:%S %z')}\n"
         f"Repository: {REPO_ROOT}\n"
-        "Issue: https://github.com/elfromsky/terbarubangetgabung/issues/1"
+        "Issue: https://github.com/elfromsky/esh-smart-home/issues/1"
     )
 
     tmp = Path(tempfile.mkdtemp(prefix="esh-diagnose-"))

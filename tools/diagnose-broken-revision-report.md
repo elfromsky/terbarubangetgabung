@@ -2,7 +2,7 @@
 
 Generated: 2026-08-14 23:56:16 +0700
 Repository: C:\Users\Advan\Documents\MEKATRONIKA\PROGRAM\terbarugabungarch\newflutbaruarch
-Issue: https://github.com/elfromsky/terbarubangetgabung/issues/1
+Issue: https://github.com/elfromsky/esh-smart-home/issues/1
 
 ## Environment
 

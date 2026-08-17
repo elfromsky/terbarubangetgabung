@@ -1,7 +1,7 @@
 # Issue #2 — Evidence-Gap Closure Addendum
 
 Generated: 2026-08-15
-Repo: `elfromsky/terbarubangetgabung`
+Repo: `elfromsky/esh-smart-home`
 Scope: close the remaining acceptance-criteria gaps in the Issue #2 final evidence
 report. This addendum does **not** restart the investigation; it only fills the
 five primary gaps (plus optional Modbus fixtures) identified after the previous
