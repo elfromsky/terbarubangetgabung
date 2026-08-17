@@ -66,6 +66,34 @@ tools/...               deterministic contract tests
 CI runs Flutter, Master, Slave, Firebase rules, and deterministic contract
 tests. Locally you can run each of these (see `README.md`).
 
+## Releasing
+
+A coordinated release is a deliberate, tagged action on `main`. See
+`docs/RELEASES.md` for the authoritative release process. Summary:
+
+```text
+feature branch
+      |
+      v
+PR (normal coordinated CI)
+      |
+      v
+main
+      |
+      v
+release version prepared (VERSION + Flutter build-name)
+      |
+      v
+esh-vX.Y.Z tag (deliberate maintainer action)
+      |
+      v
+release gates + versioned artifacts
+```
+
+Normal changes never create a release tag; they only move `main`. A release
+tag is created manually after merge, and the release workflow packages the
+versioned artifacts.
+
 ## Contracts first
 
 When a change alters an interface, update the matching document in

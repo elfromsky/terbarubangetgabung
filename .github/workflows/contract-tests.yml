@@ -31,3 +31,9 @@ jobs:
 
       - name: Issue #23 command lifecycle E2E simulation
         run: python tools/command_lifecycle_e2e_tests.py
+
+      - name: Issue #25 release metadata unit tests
+        run: python scripts/release/test_release.py
+
+      - name: Issue #25 coordinated version validation
+        run: python scripts/release/release.py validate

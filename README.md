@@ -47,6 +47,7 @@ Telemetry travels the reverse path (Slave -> Master -> RTDB -> Flutter).
 ├── tools/               deterministic contract/evidence tests and diagnostics
 ├── docs/                architecture, development, provisioning docs
 ├── scripts/ci/          CI helper scripts (synthetic provisioning, hygiene)
+├── scripts/release/     coordinated release/version tooling
 └── .github/workflows/   coordinated CI
 ```
 
@@ -130,6 +131,18 @@ Cross-component interfaces are documented in `contracts/`. See
 `contracts/README.md` for the index. Rationale: a contract change spans
 Flutter, Firebase rules, Master, and Slave simultaneously, so it is one
 coordinated pull request.
+
+## Releases
+
+One `main` commit is one coordinated system revision. A release is an annotated
+tag `esh-vX.Y.Z` that pins Flutter, Master, Slave, Firebase, contracts, and
+tests together. See `docs/RELEASES.md` for the version convention, compatibility
+policy, and release procedure.
+
+```bash
+python scripts/release/release.py validate
+python scripts/release/release.py manifest --output dist/release-manifest.json
+```
 
 ## Security
 

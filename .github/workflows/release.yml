@@ -1,0 +1,148 @@
+name: Release CI
+
+on:
+  push:
+    tags:
+      - "esh-v*.*.*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    name: Build and package coordinated release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Derive coordinated version
+        id: version
+        run: |
+          echo "VERSION=$(cat VERSION)" >> "$GITHUB_ENV"
+          echo "version=$(cat VERSION)" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve release tag
+        id: tag
+        run: |
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            echo "TAG=$GITHUB_REF_NAME" >> "$GITHUB_ENV"
+          else
+            echo "TAG=" >> "$GITHUB_ENV"
+          fi
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Validate release metadata (fail closed)
+        run: |
+          if [[ -n "$TAG" ]]; then
+            python scripts/release/release.py validate --tag "$TAG"
+          else
+            python scripts/release/release.py validate
+          fi
+
+      - name: Release metadata unit tests
+        run: python scripts/release/test_release.py
+
+      - name: Install PlatformIO
+        run: python -m pip install --upgrade platformio
+
+      - name: Generate synthetic provisioning (Master)
+        run: bash scripts/ci/prepare-synthetic-provisioning.sh master firmware/master
+
+      - name: Build Master firmware
+        working-directory: firmware/master
+        run: pio run -e esp32-s3-devkitc-1
+
+      - name: Generate synthetic provisioning (Slave)
+        run: bash scripts/ci/prepare-synthetic-provisioning.sh slave firmware/slave
+
+      - name: Build Slave firmware
+        working-directory: firmware/slave
+        run: pio run -e esp32-s3-devkitc-1
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: "3.44.8"
+          cache: true
+
+      - name: Install Flutter dependencies
+        working-directory: apps/flutter
+        run: flutter pub get
+
+      - name: Build debug APK
+        working-directory: apps/flutter
+        run: flutter build apk --debug
+
+      - name: Package versioned artifacts
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+
+          cp apps/flutter/build/app/outputs/flutter-apk/app-debug.apk \
+            "dist/esh-flutter-$VERSION-debug.apk"
+
+          mkdir -p dist/master-stage
+          cp firmware/master/.pio/build/esp32-s3-devkitc-1/firmware.bin dist/master-stage/ 2>/dev/null || true
+          cp firmware/master/.pio/build/esp32-s3-devkitc-1/bootloader.bin dist/master-stage/ 2>/dev/null || true
+          cp firmware/master/.pio/build/esp32-s3-devkitc-1/partitions.bin dist/master-stage/ 2>/dev/null || true
+          (cd dist/master-stage && zip -r "../esh-master-$VERSION-ci.zip" .)
+
+          mkdir -p dist/slave-stage
+          cp firmware/slave/.pio/build/esp32-s3-devkitc-1/firmware.bin dist/slave-stage/ 2>/dev/null || true
+          cp firmware/slave/.pio/build/esp32-s3-devkitc-1/bootloader.bin dist/slave-stage/ 2>/dev/null || true
+          cp firmware/slave/.pio/build/esp32-s3-devkitc-1/partitions.bin dist/slave-stage/ 2>/dev/null || true
+          (cd dist/slave-stage && zip -r "../esh-slave-$VERSION-ci.zip" .)
+
+          (cd firebase && zip -r "../dist/esh-firebase-$VERSION.zip" .)
+
+          if [[ -n "$TAG" ]]; then
+            python scripts/release/release.py manifest --tag "$TAG" \
+              --output "dist/esh-release-manifest-$VERSION.json"
+          else
+            python scripts/release/release.py manifest \
+              --output "dist/esh-release-manifest-$VERSION.json"
+          fi
+
+          (cd dist && sha256sum esh-* > "esh-SHA256SUMS-$VERSION.txt")
+
+      - name: Upload Flutter artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: esh-flutter-${{ steps.version.outputs.version }}-debug
+          path: dist/esh-flutter-${{ steps.version.outputs.version }}-debug.apk
+
+      - name: Upload Master firmware artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: esh-master-${{ steps.version.outputs.version }}-ci
+          path: dist/esh-master-${{ steps.version.outputs.version }}-ci.zip
+
+      - name: Upload Slave firmware artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: esh-slave-${{ steps.version.outputs.version }}-ci
+          path: dist/esh-slave-${{ steps.version.outputs.version }}-ci.zip
+
+      - name: Upload Firebase source artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: esh-firebase-${{ steps.version.outputs.version }}
+          path: dist/esh-firebase-${{ steps.version.outputs.version }}.zip
+
+      - name: Upload release manifest
+        uses: actions/upload-artifact@v4
+        with:
+          name: esh-release-manifest-${{ steps.version.outputs.version }}
+          path: dist/esh-release-manifest-${{ steps.version.outputs.version }}.json
+
+      - name: Upload checksums
+        uses: actions/upload-artifact@v4
+        with:
+          name: esh-SHA256SUMS-${{ steps.version.outputs.version }}
+          path: dist/esh-SHA256SUMS-${{ steps.version.outputs.version }}.txt
